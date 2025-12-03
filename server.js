@@ -3,14 +3,21 @@ const express = require("express");
 const connectDB = require("./config/db");
 
 const app = express();
+
+// Middleware
 app.use(express.json());
 
+// Connect to DB
 connectDB();
 
+// Base route
 app.get("/", (req, res) => {
   res.send("API is running...");
 });
 
+// Load all routes through routes/index.js
 app.use("/api", require("./routes/index"));
 
-app.listen(5000, () => console.log("Server running on 5000"));
+app.listen(5000, () =>
+   console.log("Server running on 5000")
+);
