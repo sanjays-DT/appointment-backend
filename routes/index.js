@@ -7,6 +7,6 @@ router.use("/auth", require("./authRoutes"));
 router.use("/categories", require("./categoryRoutes"));
 
 // Provider Routes 
-router.use("/admin/providers", require("./providerRoutes"));
+router.use("/providers", require("./providerRoutes"));
 
 module.exports = router;

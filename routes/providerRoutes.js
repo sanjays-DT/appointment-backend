@@ -4,14 +4,13 @@ const providerController = require("../controllers/providerController");
 
 const { protect, adminOnly } = require("../middlewares/authMiddleware");
 
-// CRUD Routes
-router.post("/", protect, adminOnly, providerController.createProvider);        // Create provider
-router.get("/", protect, providerController.getProviders);                      // Get all providers
-router.get("/:id", protect, providerController.getProviderById);                // Get provider by ID
-router.put("/:id", protect, adminOnly, providerController.updateProvider);      // Update provider
-router.delete("/:id", protect, adminOnly, providerController.deleteProvider);   // Delete provider
+router.post("/", protect, adminOnly, providerController.createProvider);        
+router.get("/", protect, providerController.getProviders);                     
+router.get("/:id", protect, providerController.getProviderById);                
+router.put("/:id", protect, adminOnly, providerController.updateProvider);     
+router.delete("/:id", protect, adminOnly, providerController.deleteProvider);   
 
-// Availability Routes
+
 router.put("/:id/availability", protect, adminOnly, providerController.setAvailability);          
 router.put("/:id/unavailable-dates", protect, adminOnly, providerController.addUnavailableDates);
 

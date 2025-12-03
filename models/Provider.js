@@ -19,7 +19,7 @@ const providerSchema = new mongoose.Schema({
             day: String,
             startTime: String,
             endTime: String,
-            _id: false  // 🚫 prevents weeklyAvailability from having _id
+            _id: false  
         }
     ],
 
