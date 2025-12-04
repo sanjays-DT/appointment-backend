@@ -1,4 +1,5 @@
 const Category = require("../models/Category");
+const mongoose = require("mongoose");
 
 exports.createCategory = async (req, res) => {
   try {
@@ -38,6 +39,43 @@ exports.getCategories = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// GET SINGLE CATEGORY
+exports.getSingleCategory = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Validate ID format
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid category ID format"
+      });
+    }
+
+    const category = await Category.findById(id);
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: "Category not found"
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Category fetched successfully",
+      data: category
+    });
+
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: err.message
+    });
+  }
+};
+
 
 exports.updateCategory = async (req, res) => {
   try {
