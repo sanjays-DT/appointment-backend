@@ -101,7 +101,7 @@ exports.createAppointment = async (req, res) => {
     // USER notification
     await Notification.create({
       userId,
-      message: "Your appointment has been created and is pending approval."
+      message: `Your appointment has been created with ${populated.providerId.name} and is pending approval.`
     });
 
     // PROVIDER notification 

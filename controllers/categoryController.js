@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 
 exports.createCategory = async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description , image } = req.body;
 
     // Check required fields
     if (!name || !description) {
@@ -18,7 +18,8 @@ exports.createCategory = async (req, res) => {
 
     const category = await Category.create({ 
       name: name.trim(), 
-      description 
+      description ,
+      image
     });
 
     res.status(201).json({
