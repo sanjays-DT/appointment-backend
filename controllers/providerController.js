@@ -4,10 +4,10 @@ const Category = require("../models/Category");
 // Create Provider
 exports.createProvider = async (req, res) => {
     try {
-        const { categoryId, name, speciality, hourlyPrice, location } = req.body;
+        const { categoryId, name, speciality, hourlyPrice, address, city } = req.body;
 
         // 1️⃣ Validate required fields
-        if (!categoryId || !name || !speciality || !hourlyPrice || !location) {
+        if (!categoryId || !name || !speciality || !hourlyPrice || !address || !city) {
             return res.status(400).json({
                 msg: "categoryId, name, speciality, hourlyPrice, and location are required."
             });

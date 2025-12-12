@@ -1,4 +1,5 @@
 const Category = require("../models/Category");
+const Provider = require("../models/Provider");
 const mongoose = require("mongoose");
 
 exports.createCategory = async (req, res) => {
@@ -34,12 +35,23 @@ exports.createCategory = async (req, res) => {
 
 exports.getCategories = async (req, res) => {
   try {
-    const list = await Category.find();
-    res.json(list);
+    const categories = await Category.find();
+
+    const categoriesWithProviders = [];
+
+    for (const cat of categories) {
+      const providerCount = await Provider.countDocuments({ categoryId: cat._id });
+      if (providerCount > 0) {
+        categoriesWithProviders.push(cat);
+      }
+    }
+
+    res.json(categoriesWithProviders);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
+
 
 // GET SINGLE CATEGORY
 exports.getSingleCategory = async (req, res) => {
@@ -98,7 +110,6 @@ exports.updateCategory = async (req, res) => {
       data: updated,
     });
   } catch (err) {
-    // Duplicate name handling
     if (err.code === 11000) {
       return res.status(400).json({ message: "Category name already exists" });
     }
