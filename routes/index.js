@@ -15,4 +15,7 @@ router.use("/appointment", require("./appointmentRoutes.js"));
 // Notification Routes
 router.use("/notifications", require("./notificationRoutes.js"));
 
+// Admin Analytics Routes
+router.use("/analytics", require("./adminAnalyticsRoutes.js"));
+
 module.exports = router;

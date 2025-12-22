@@ -4,6 +4,7 @@ const { protect, adminOnly } = require("../middlewares/authMiddleware");
 
 const {
   createAppointment,
+  getAllAppointments,
   getUserAppointments,
   approveAppointment,
   rejectAppointment,
@@ -12,6 +13,7 @@ const {
 } = require("../controllers/appointmentController");
 
 router.post("/", protect, createAppointment);
+router.get("/",protect, adminOnly, getAllAppointments);
 router.get("/me",protect, getUserAppointments);
 router.put("/:id/approve", protect, adminOnly, approveAppointment);
 router.put("/:id/reject", protect, adminOnly, rejectAppointment);

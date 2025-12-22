@@ -1,6 +1,7 @@
 const Appointment = require("../models/Appointment");
 const Notification = require("../models/Notification");
 const Provider = require("../models/Provider");
+const User = require("../models/User");
 const mongoose = require("mongoose");
 
 /* 
@@ -23,6 +24,11 @@ function validateTime(start, end) {
   }
 
   return { startDate: s, endDate: e };
+}
+
+async function getAdminUserIds() {
+  const admins = await User.find({ role: "admin" }).select("_id");
+  return admins.map(a => a._id);
 }
 
 /* 
@@ -105,10 +111,11 @@ exports.createAppointment = async (req, res) => {
     });
 
     // PROVIDER notification 
-    if (provider.userId) {
+    const adminIds = await getAdminUserIds();
+    for (const adminId of adminIds) {
       await Notification.create({
-        userId: provider.userId,
-        message: `${populated.userId.name} booked an appointment with you.`
+        userId: adminId,
+        message: `${populated.userId.name} booked an appointment with ${populated.providerId.name}.`
       });
     }
 
@@ -123,6 +130,29 @@ exports.createAppointment = async (req, res) => {
       success: false,
       message: err.message || "Server error"
     });
+  }
+};
+
+
+exports.getAllAppointments = async (req, res) => {
+  try {
+    const appointments = await Appointment.find()
+      .populate("userId", "name email")
+      .populate({
+        path: "providerId",
+        populate: {
+          path: "categoryId",
+          select: "name",
+        },
+      })
+      .sort({ start: -1 });
+
+    res.json({
+      success: true,
+      appointments,
+    });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch appointments" });
   }
 };
 
@@ -281,12 +311,14 @@ exports.cancelAppointment = async (req, res) => {
     });
 
     // PROVIDER notification  → only when USER cancels
-    if (req.user.role !== "admin" && appt.providerId.userId) {
+    const adminIds = await getAdminUserIds();
+    for (const adminId of adminIds) {
       await Notification.create({
-        userId: appt.providerId.userId,
-        message: `${appt.userId.name} cancelled their appointment.`
+        userId: adminId,
+        message: `${appt.userId.name} cancelled their appointment with ${appt.providerId.name}.`
       });
     }
+
 
     return res.json({
       success: true,
@@ -382,10 +414,11 @@ exports.rescheduleAppointment = async (req, res) => {
     });
 
     // PROVIDER notification  → only when USER reschedules
-    if (req.user.role !== "admin" && appointment.providerId.userId) {
+    const adminIds = await getAdminUserIds();
+    for (const adminId of adminIds) {
       await Notification.create({
-        userId: appointment.providerId.userId,
-        message: `${appointment.userId.name} rescheduled their appointment.`
+        userId: adminId,
+        message: `${appointment.userId.name} rescheduled their appointment with ${appointment.providerId.name}.`
       });
     }
 
