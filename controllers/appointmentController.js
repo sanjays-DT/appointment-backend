@@ -51,10 +51,7 @@ async function hasConflict(providerId, start, end, excludeId = null) {
   return await Appointment.findOne(query);
 }
 
-
-
 // CREATE APPOINTMENT (Only logged-in user)
-
 exports.createAppointment = async (req, res) => {
   try {
     const { providerId, start, end } = req.body;
@@ -110,7 +107,7 @@ exports.createAppointment = async (req, res) => {
       message: `Your appointment has been created with ${populated.providerId.name} and is pending approval.`
     });
 
-    // PROVIDER notification 
+    // PROVIDER notification → admin
     const adminIds = await getAdminUserIds();
     for (const adminId of adminIds) {
       await Notification.create({
@@ -179,9 +176,7 @@ exports.getUserAppointments = async (req, res) => {
   }
 };
 
-
 // APPROVE APPOINTMENT (Admin Only)
-
 exports.approveAppointment = async (req, res) => {
   try {
     if (req.user.role !== "admin") {
@@ -226,10 +221,7 @@ exports.approveAppointment = async (req, res) => {
   }
 };
 
-
-
 // REJECT APPOINTMENT (Admin Only)
-
 exports.rejectAppointment = async (req, res) => {
   try {
     if (req.user.role !== "admin") {
@@ -274,10 +266,7 @@ exports.rejectAppointment = async (req, res) => {
   }
 };
 
-
-
 // CANCEL APPOINTMENT
-
 exports.cancelAppointment = async (req, res) => {
   try {
     const { id } = req.params;
@@ -310,15 +299,16 @@ exports.cancelAppointment = async (req, res) => {
       message: `Your appointment with ${appt.providerId.name} has been cancelled.`
     });
 
-    // PROVIDER notification  → only when USER cancels
-    const adminIds = await getAdminUserIds();
-    for (const adminId of adminIds) {
-      await Notification.create({
-        userId: adminId,
-        message: `${appt.userId.name} cancelled their appointment with ${appt.providerId.name}.`
-      });
+    // PROVIDER notification → only when USER cancels
+    if (req.user.role !== "admin") {
+      const adminIds = await getAdminUserIds();
+      for (const adminId of adminIds) {
+        await Notification.create({
+          userId: adminId,
+          message: `${appt.userId.name} cancelled their appointment with ${appt.providerId.name}.`
+        });
+      }
     }
-
 
     return res.json({
       success: true,
@@ -334,10 +324,7 @@ exports.cancelAppointment = async (req, res) => {
   }
 };
 
-
-
 // RESCHEDULE APPOINTMENT
-
 exports.rescheduleAppointment = async (req, res) => {
   try {
     const appointmentId = req.params.id;
@@ -364,17 +351,12 @@ exports.rescheduleAppointment = async (req, res) => {
 
     // USER restriction 
     if (req.user.role !== "admin") {
-
       if (appointment.userId._id.toString() !== req.user.id) {
         return res.status(403).json({ message: "You cannot reschedule this appointment." });
       }
 
-      if (appointment.status === "cancelled") {
-        return res.status(400).json({ message: "Cancelled appointments cannot be rescheduled." });
-      }
-
-      if (appointment.status === "rejected") {
-        return res.status(400).json({ message: "Rejected appointments cannot be rescheduled." });
+      if (["cancelled", "rejected"].includes(appointment.status)) {
+        return res.status(400).json({ message: `${appointment.status} appointments cannot be rescheduled.` });
       }
     }
 
@@ -413,13 +395,15 @@ exports.rescheduleAppointment = async (req, res) => {
       message: notifyMessage,
     });
 
-    // PROVIDER notification  → only when USER reschedules
-    const adminIds = await getAdminUserIds();
-    for (const adminId of adminIds) {
-      await Notification.create({
-        userId: adminId,
-        message: `${appointment.userId.name} rescheduled their appointment with ${appointment.providerId.name}.`
-      });
+    // ADMIN notification → ONLY when USER reschedules
+    if (req.user.role !== "admin") {
+      const adminIds = await getAdminUserIds();
+      for (const adminId of adminIds) {
+        await Notification.create({
+          userId: adminId,
+          message: `${appointment.userId.name} rescheduled their appointment with ${appointment.providerId.name}.`
+        });
+      }
     }
 
     return res.status(200).json({
