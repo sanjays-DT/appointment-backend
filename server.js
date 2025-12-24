@@ -9,7 +9,8 @@ app.use(cors({
   origin: [
     "http://localhost:3000",
     "http://localhost:2000",
-    "https://appointment-frontend-6jd3.vercel.app" 
+    "https://appointment-frontend-6jd3.vercel.app",
+    "https://appointment-frontend-admin-4ays.vercel.app/"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
