@@ -1,29 +1,34 @@
 require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
 const connectDB = require("./config/db");
-const cors = require("cors"); 
 
 const app = express();
 
-// Middleware
-app.use(express.json());
-
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:2000", "https://appointment-frontend-user.netlify.app"], 
-  credentials: true, 
+  origin: [
+    "http://localhost:3000",
+    "http://localhost:2000",
+    "https://appointment-frontend-6jd3.vercel.app" 
+  ],
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-// Connect to DB
+app.options(/.*/, cors());
+
+app.use(express.json());
 connectDB();
 
-// Base route
+/* ---------- Routes ---------- */
 app.get("/", (req, res) => {
   res.send("API is running...");
 });
 
-// Load all routes through routes/index.js
 app.use("/api", require("./routes/index"));
 
-app.listen(5000, () =>
-   console.log("Server running on 5000")
-);
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
