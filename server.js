@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json());
 
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:2000", "https://frontend-userui.netlify.app"], 
+  origin: ["http://localhost:3000", "http://localhost:2000", "https://appointment-frontend-user.netlify.app"], 
   credentials: true, 
 }));
 
