@@ -65,8 +65,8 @@ Backend service for an appointment booking platform supporting user, provider, a
 => Create a .env file:
 
 PORT=5000
-MONGO_URI = "mongodb+srv://sanjays_db_user:12345@appointmentdb.3b7alet.mongodb.net/?appName=AppointmentDB"
-JWT_SECRET = secret_key
+MONGO_URI=your_mongodb_uri
+JWT_SECRET=your_jwt_secret
 
 **Running the Project**
 
