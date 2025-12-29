@@ -65,7 +65,9 @@ Backend service for an appointment booking platform supporting user, provider, a
 => Create a .env file:
 
 PORT=5000
+
 MONGO_URI=your_mongodb_uri
+
 JWT_SECRET=your_jwt_secret
 
 **Running the Project**
