@@ -18,4 +18,6 @@ router.use("/notifications", require("./notificationRoutes.js"));
 // Admin Analytics Routes
 router.use("/analytics", require("./adminAnalyticsRoutes.js"));
 
+// User Routes
+router.use("/usersImage", require("./userRoutes"));
 module.exports = router;
