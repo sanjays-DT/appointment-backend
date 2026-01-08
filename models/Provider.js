@@ -10,17 +10,20 @@ const providerSchema = new mongoose.Schema({
     name: { type: String, required: true },
     speciality: { type: String, required: true },
     bio: { type: String },
-    avatar: { type: String },
+    avatar: {
+        data: Buffer,
+        contentType: String,
+    },
     hourlyPrice: { type: Number, required: true },
     address: { type: String, required: true },
-    city: {type: String, required: true },
+    city: { type: String, required: true },
 
     weeklyAvailability: [
         {
             day: String,
             startTime: String,
             endTime: String,
-            _id: false  
+            _id: false
         }
     ],
 

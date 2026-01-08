@@ -9,7 +9,6 @@ const User = require("../models/User.js");
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* ================= GET AVATAR ================= */
-// Keep your existing route exactly as is
 router.get("/:id/avatar", async (req, res) => {
   try {
     const user = await User.findById(req.params.id);

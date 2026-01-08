@@ -1,32 +1,27 @@
 const Category = require("../models/Category");
 const Provider = require("../models/Provider");
 const mongoose = require("mongoose");
+const multer = require("multer");
 
+// CREATE
 exports.createCategory = async (req, res) => {
   try {
-    const { name, description , image } = req.body;
+    const { name, description } = req.body;
 
-    // Check required fields
-    if (!name || !description) {
-      return res.status(400).json({ message: "Name and description are required" });
-    }
-
-    // Check duplicate name
-    const exists = await Category.findOne({ name: name.trim() });
-    if (exists) {
-      return res.status(400).json({ message: "Category already exists" });
-    }
-
-    const category = await Category.create({ 
-      name: name.trim(), 
-      description ,
-      image
+    const category = new Category({
+      name,
+      description,
     });
 
-    res.status(201).json({
-      message: "Category created successfully",
-      data: category
-    });
+    if (req.file) {
+      category.image = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+      };
+    }
+
+    await category.save();
+    res.status(201).json(category);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -90,36 +85,31 @@ exports.getSingleCategory = async (req, res) => {
 };
 
 
+// UPDATE
 exports.updateCategory = async (req, res) => {
   try {
+    const category = await Category.findById(req.params.id);
+    if (!category) return res.sendStatus(404);
+
     const { name, description } = req.body;
+    if (name) category.name = name;
+    if (description) category.description = description;
 
-    const updated = await Category.findByIdAndUpdate(
-      req.params.id,
-      { name, description },
-      { new: true, runValidators: true }
-    );
-
-    // If category does not exist
-    if (!updated) {
-      return res.status(404).json({ message: "Category not found" });
+    if (req.file) {
+      category.image = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+      };
     }
 
-    res.status(200).json({
-      message: "Category updated successfully",
-      data: updated,
-    });
+    await category.save();
+    res.json(category);
   } catch (err) {
-    if (err.code === 11000) {
-      return res.status(400).json({ message: "Category name already exists" });
-    }
-
     res.status(500).json({ message: err.message });
   }
 };
 
-
-
+// DELETE
 exports.deleteCategory = async (req, res) => {
   try {
     const deletedCategory = await Category.findByIdAndDelete(req.params.id);
@@ -134,3 +124,15 @@ exports.deleteCategory = async (req, res) => {
   }
 };
 
+// GET IMAGE
+exports.getCategoryImage = async (req, res) => {
+  try {
+    const category = await Category.findById(req.params.id);
+    if (!category || !category.image) return res.sendStatus(404);
+
+    res.set("Content-Type", category.image.contentType);
+    res.send(category.image.data);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};

@@ -1,43 +1,24 @@
 const Provider = require("../models/Provider");
 const Category = require("../models/Category");
+const upload = require("../middlewares/upload");
 
-// Create Provider
+// CREATE
 exports.createProvider = async (req, res) => {
-    try {
-        const { categoryId, name, speciality, hourlyPrice, address, city } = req.body;
+  try {
+    const provider = new Provider(req.body);
 
-        // 1️⃣ Validate required fields
-        if (!categoryId || !name || !speciality || !hourlyPrice || !address || !city) {
-            return res.status(400).json({
-                msg: "categoryId, name, speciality, hourlyPrice, and location are required."
-            });
-        }
-
-        // 2️⃣ Validate category ID exists
-        const category = await Category.findById(categoryId);
-        if (!category) {
-            return res.status(400).json({ msg: "Invalid categoryId. Category not found." });
-        }
-
-        // 3️⃣ Prevent duplicate providers (same name + speciality)
-        const existing = await Provider.findOne({ name, speciality });
-        if (existing) {
-            return res.status(409).json({
-                msg: "Provider with the same name and speciality already exists."
-            });
-        }
-
-        // 4️⃣ Create provider
-        const provider = await Provider.create(req.body);
-
-        res.status(201).json({
-            message: "Provider created successfully",
-            provider
-        });
-
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    if (req.file) {
+      provider.avatar = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+      };
     }
+
+    await provider.save();
+    res.status(201).json(provider);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 };
 
 
@@ -71,25 +52,56 @@ exports.getProviderById = async (req, res) => {
 
 
 
-// Update provider
+// UPDATE PROVIDER
 exports.updateProvider = async (req, res) => {
-    try {
-        const provider = await Provider.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true }
-        );
+  try {
+    const provider = await Provider.findById(req.params.id);
+    if (!provider) return res.sendStatus(404);
 
-        if (!provider) {
-            return res.status(404).json({ msg: "Provider not found" });
-        }
-
-        res.json(provider);
-
-    } catch (error) {
-        res.status(500).json({ error: error.message });
+    // update text fields
+    if (req.body && Object.keys(req.body).length > 0) {
+      Object.assign(provider, req.body);
     }
+
+    // update avatar only if uploaded
+    if (req.file) {
+      provider.avatar = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype,
+      };
+    }
+
+    await provider.save();
+
+    // ❌ do NOT send avatar buffer back
+    res.json({
+      message: "Provider updated successfully",
+      provider: {
+        _id: provider._id,
+        name: provider.name,
+        speciality: provider.speciality,
+        hourlyPrice: provider.hourlyPrice,
+        city: provider.city,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 };
+
+// // GET PROVIDER AVATAR
+exports.getProviderAvatar = async (req, res) => {
+   try {
+      const provider = await Provider.findById(req.params.id);
+      if (!provider || !provider.avatar) 
+          return res.sendStatus(404);
+      res.set("Content-Type", provider.avatar.contentType);
+      res.send(provider.avatar.data);
+    } catch (err) {
+      console.error("Avatar fetch error →", err);
+      res.status(500).json({ message: err.message });
+    }
+  }; 
 
 
 
@@ -108,7 +120,6 @@ exports.deleteProvider = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
 
 
 // Set weekly availability
