@@ -179,6 +179,7 @@ exports.getUserAppointments = async (req, res) => {
 // APPROVE APPOINTMENT (Admin Only)
 exports.approveAppointment = async (req, res) => {
   try {
+    // Role check
     if (req.user.role !== "admin") {
       return res.status(403).json({
         success: false,
@@ -188,11 +189,9 @@ exports.approveAppointment = async (req, res) => {
 
     const { id } = req.params;
 
-    const appt = await Appointment.findByIdAndUpdate(
-      id,
-      { status: "approved" },
-      { new: true }
-    ).populate("userId", "name email")
+    // Fetch appointment FIRST (important for time check)
+    const appt = await Appointment.findById(id)
+      .populate("userId", "name email")
       .populate("providerId", "name speciality");
 
     if (!appt) {
@@ -202,6 +201,22 @@ exports.approveAppointment = async (req, res) => {
       });
     }
 
+    // 15-minute approval rule
+    const startTime = new Date(appt.startTime); // appointment start time
+    const approvalDeadline = new Date(startTime.getTime() + 15 * 60 * 1000);
+
+    if (new Date() > approvalDeadline) {
+      return res.status(400).json({
+        success: false,
+        message: "Approval time exceeded. Please reschedule or reject."
+      });
+    }
+
+    // Approve appointment
+    appt.status = "approved";
+    await appt.save();
+
+    //  Notify user
     await Notification.create({
       userId: appt.userId,
       message: `Your appointment with ${appt.providerId.name} has been approved.`
@@ -349,7 +364,7 @@ exports.rescheduleAppointment = async (req, res) => {
       return res.status(404).json({ message: "Appointment not found." });
     }
 
-    // USER restriction 
+    // USER restriction
     if (req.user.role !== "admin") {
       if (appointment.userId._id.toString() !== req.user.id) {
         return res.status(403).json({ message: "You cannot reschedule this appointment." });
@@ -376,7 +391,9 @@ exports.rescheduleAppointment = async (req, res) => {
     appointment.start = startDate;
     appointment.end = endDate;
 
-    if (req.user.role === "admin") {
+    if (appointment.status === "missed") {
+      appointment.status = "rescheduled";
+    } else if (req.user.role === "admin") {
       appointment.status = "approved";
     } else {
       appointment.status = "pending";
@@ -384,12 +401,16 @@ exports.rescheduleAppointment = async (req, res) => {
 
     await appointment.save();
 
-    const notifyMessage =
-      req.user.role === "admin"
-        ? "Your appointment has been rescheduled by admin and approved."
-        : "Your appointment has been rescheduled and is pending approval.";
-
     // USER notification
+    let notifyMessage;
+    if (appointment.status === "rescheduled") {
+      notifyMessage = "Your missed appointment has been rescheduled. Please check the new timing.";
+    } else if (req.user.role === "admin") {
+      notifyMessage = "Your appointment has been rescheduled by admin and approved.";
+    } else {
+      notifyMessage = "Your appointment has been rescheduled and is pending approval.";
+    }
+
     await Notification.create({
       userId: appointment.userId,
       message: notifyMessage,
@@ -401,7 +422,7 @@ exports.rescheduleAppointment = async (req, res) => {
       for (const adminId of adminIds) {
         await Notification.create({
           userId: adminId,
-          message: `${appointment.userId.name} rescheduled their appointment with ${appointment.providerId.name}.`
+          message: `${appointment.userId.name} rescheduled their appointment with ${appointment.providerId.name}.`,
         });
       }
     }
@@ -415,3 +436,40 @@ exports.rescheduleAppointment = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
+
+// MARK MISSED APPOINTMENTS (SYSTEM JOB)
+exports.markMissedAppointments = async () => {
+  const now = new Date();
+
+  
+  const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
+
+  const missedAppointments = await Appointment.find({
+    status: "pending",
+    start: { $lt: fifteenMinutesAgo } 
+  })
+    .populate("userId", "name")
+    .populate("providerId", "name");
+
+  for (const appt of missedAppointments) {
+    appt.status = "missed";
+    await appt.save();
+
+    // USER notification
+    await Notification.create({
+      userId: appt.userId._id,
+      message: `Your appointment with ${appt.providerId.name} was missed. Please reschedule.`
+    });
+
+    // ADMIN notification
+    const adminIds = await getAdminUserIds();
+    for (const adminId of adminIds) {
+      await Notification.create({
+        userId: adminId,
+        message: `You did not approve the appointment for ${appt.userId.name} with ${appt.providerId.name} within 15 minutes.`
+      });
+    }
+  }
+};
+
