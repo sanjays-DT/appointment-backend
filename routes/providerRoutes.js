@@ -1,13 +1,17 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
 const providerController = require("../controllers/providerController");
 
 const { protect, adminOnly } = require("../middlewares/authMiddleware");
 
-router.post("/", protect, adminOnly, providerController.createProvider);        
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.post("/", upload.single("avatar"), providerController.createProvider);
+router.put("/:id", upload.single("avatar"), providerController.updateProvider);
+router.get("/:id/avatar",providerController.getProviderAvatar);    
 router.get("/", protect, providerController.getProviders);                     
-router.get("/:id", protect, providerController.getProviderById);                
-router.put("/:id", protect, adminOnly, providerController.updateProvider);     
+router.get("/:id", protect, providerController.getProviderById);                    
 router.delete("/:id", protect, adminOnly, providerController.deleteProvider);   
 
 
