@@ -20,4 +20,5 @@ router.use("/analytics", require("./adminAnalyticsRoutes.js"));
 
 // User Routes
 router.use("/users", require("./userRoutes"));
+
 module.exports = router;
