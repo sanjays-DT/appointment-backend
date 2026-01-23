@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const { protect } = require("../middlewares/authMiddleware.js");
-const { updateProfile, getUsersForReset } = require("../controllers/userController.js");
+const { updateProfile, getUsersForReset,getPreferences, updatePreferences,} = require("../controllers/userController.js");
 const { adminApproveRequest } = require("../controllers/authController.js");
 const User = require("../models/User");
 
@@ -38,10 +38,18 @@ router.post("/admin/reset-password", protect, async (req, res, next) => {
   next();
 }, adminApproveRequest);
 
-// ✅ Users who requested password reset
+//  Users who requested password reset
 router.get("/reset-requests", protect, async (req, res, next) => {
   if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
   next();
 }, getUsersForReset);
+
+/* ================= PREFERENCES ROUTES ================= */
+
+// GET /api/preferences
+router.get("/preferences", protect, getPreferences);
+
+// PUT /api/preferences
+router.put("/preferences", protect, updatePreferences);
 
 module.exports = router;
