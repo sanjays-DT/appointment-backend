@@ -19,14 +19,21 @@ const providerSchema = new mongoose.Schema({
     city: { type: String, required: true },
 
     weeklyAvailability: [
-        {
-            day: String,
-            startTime: String,
-            endTime: String,
-            _id: false
-        }
+  {
+    day: String,
+    startTime: String,
+    endTime: String,
+    slots: [
+      {
+        time: String,
+        isBooked: { type: Boolean, default: false },
+        _id: false
+      }
     ],
-
+    _id: false
+  }
+]
+,
     unavailableDates: {
         type: [String],
         default: [],
