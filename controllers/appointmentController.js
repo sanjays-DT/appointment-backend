@@ -4,9 +4,9 @@ const Provider = require("../models/Provider");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 
-/* 
-   HELPER: Validate Time Range
- */
+/* =========================================================
+   HELPER: Validate Time
+========================================================= */
 function validateTime(start, end) {
   const s = new Date(start);
   const e = new Date(end);
@@ -31,62 +31,53 @@ async function getAdminUserIds() {
   return admins.map(a => a._id);
 }
 
-/* 
-   HELPER: Check Time Conflict
- */
-async function hasConflict(providerId, start, end, excludeId = null) {
-  const query = {
-    providerId: new mongoose.Types.ObjectId(providerId),
-    status: { $in: ["pending", "approved"] },
-    $expr: {
-      $and: [
-        { $lt: ["$start", end] },
-        { $gt: ["$end", start] }
-      ]
-    }
-  };
-
-  if (excludeId) query._id = { $ne: excludeId };
-
-  return await Appointment.findOne(query);
+function getRole(req) {
+  if (req.user) return req.user.role;
+  if (req.provider) return "provider";
+  return req.auth?.role;
 }
 
-// CREATE APPOINTMENT (Only logged-in user)
+function getAuthId(req) {
+  if (req.user) return req.user._id?.toString();
+  if (req.provider) return req.provider._id?.toString();
+  return req.auth?.id;
+}
+
+/* =========================================================
+   CREATE APPOINTMENT (USER ONLY)
+========================================================= */
 exports.createAppointment = async (req, res) => {
   try {
+    const role = getRole(req);
+    if (role !== "user") {
+      return res.status(403).json({ message: "Only users can book appointments" });
+    }
+
     const { providerId, start, end } = req.body;
-    const userId = req.user._id;
+    const userId = getAuthId(req);
 
     if (!providerId || !start || !end) {
-      return res.status(400).json({
-        success: false,
-        message: "providerId, start and end are required."
-      });
+      return res.status(400).json({ message: "providerId, start and end required" });
     }
 
     if (!mongoose.Types.ObjectId.isValid(providerId)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid providerId format."
-      });
+      return res.status(400).json({ message: "Invalid providerId" });
     }
 
     const provider = await Provider.findById(providerId);
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: "Provider not found."
-      });
-    }
+    if (!provider) return res.status(404).json({ message: "Provider not found" });
 
     const { startDate, endDate } = validateTime(start, end);
 
-    const conflict = await hasConflict(providerId, startDate, endDate);
+    const conflict = await Appointment.findOne({
+      providerId,
+      status: { $in: ["pending", "approved"] },
+      start: { $lt: endDate },
+      end: { $gt: startDate }
+    });
+
     if (conflict) {
-      return res.status(409).json({
-        success: false,
-        message: "Time slot already booked."
-      });
+      return res.status(409).json({ message: "Time slot already booked" });
     }
 
     const appointment = await Appointment.create({
@@ -97,370 +88,263 @@ exports.createAppointment = async (req, res) => {
       status: "pending"
     });
 
-    const populated = await Appointment.findById(appointment._id)
-      .populate("userId", "name email phone")
-      .populate("providerId", "name speciality hourlyPrice location");
-
-    // USER notification
     await Notification.create({
       userId,
-      message: `Your appointment has been created with ${populated.providerId.name} and is pending approval.`
+      message: `Your appointment is pending approval.`
     });
 
-    // PROVIDER notification → admin
+    await Notification.create({
+      providerId: providerId,
+      message: `New appointment request from ${req.user?.name || "a user"} is pending approval.`
+    });
+
     const adminIds = await getAdminUserIds();
-    for (const adminId of adminIds) {
-      await Notification.create({
-        userId: adminId,
-        message: `${populated.userId.name} booked an appointment with ${populated.providerId.name}.`
-      });
-    }
+    await Promise.all(
+      adminIds.map(adminId =>
+        Notification.create({
+          userId: adminId,
+          message: `New appointment requires approval.`
+        })
+      )
+    );
 
-    return res.status(201).json({
-      success: true,
-      message: "Appointment created successfully.",
-      data: populated
-    });
+    res.status(201).json({ message: "Appointment created", appointment });
 
   } catch (err) {
-    return res.status(err.status || 500).json({
-      success: false,
-      message: err.message || "Server error"
-    });
+    res.status(err.status || 500).json({ message: err.message });
   }
 };
 
-
+/* =========================================================
+   GET APPOINTMENTS (ADMIN â†’ ALL | PROVIDER â†’ OWN)
+========================================================= */
 exports.getAllAppointments = async (req, res) => {
   try {
-    const appointments = await Appointment.find()
+    const role = getRole(req);
+    const authId = getAuthId(req);
+
+    let filter = {};
+
+    if (role === "provider") {
+      filter.providerId = authId;
+    }
+
+    const appointments = await Appointment.find(filter)
       .populate("userId", "name email")
-      .populate({
-        path: "providerId",
-        populate: {
-          path: "categoryId",
-          select: "name",
-        },
-      })
+      .populate("providerId", "name speciality")
       .sort({ start: -1 });
 
-    res.json({
-      success: true,
-      appointments,
-    });
+    res.json({ appointments });
+
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch appointments" });
   }
 };
 
-// Get appointments for logged-in user
+/* =========================================================
+   GET USER APPOINTMENTS (USER ONLY)
+========================================================= */
 exports.getUserAppointments = async (req, res) => {
   try {
-    const userId = req.user._id;
+    if (!req.user) {
+      return res.status(403).json({ message: "User only access" });
+    }
 
-    const appointments = await Appointment.find({ userId })
-      .populate("providerId", "name speciality hourlyPrice location")
-      .sort({ createdAt: -1 });
+    const appointments = await Appointment.find({ userId: req.user._id })
+      .populate("providerId", "name speciality")
+      .sort({ start: -1 });
 
-    res.status(200).json({
-      success: true,
-      appointments
-    });
-
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch user appointments",
-      error: error.message
-    });
+    res.json({ appointments });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch appointments" });
   }
 };
 
-// APPROVE APPOINTMENT (Admin Only)
+/* =========================================================
+   GET PROVIDER APPOINTMENTS (PROVIDER OWN | ADMIN)
+========================================================= */
+exports.getProviderAppointments = async (req, res) => {
+  try {
+    let providerId;
+
+    if (req.provider) {
+      providerId = req.provider._id;
+    } else if (req.user?.role === "admin") {
+      providerId = req.params.id;
+    } else {
+      return res.status(403).json({ message: "Provider or admin only access" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(providerId)) {
+      return res.status(400).json({ message: "Invalid provider id" });
+    }
+
+    const appointments = await Appointment.find({ providerId })
+      .populate("userId", "name email")
+      .sort({ start: -1 });
+
+    res.json({ appointments });
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch appointments" });
+  }
+};
+
+/* =========================================================
+   APPROVE APPOINTMENT (ADMIN + PROVIDER OWN)
+========================================================= */
 exports.approveAppointment = async (req, res) => {
   try {
-    // Role check
-    if (req.user.role !== "admin") {
-      return res.status(403).json({
-        success: false,
-        message: "Only admin can approve appointments."
-      });
+    const role = getRole(req);
+    const authId = getAuthId(req);
+
+    const appt = await Appointment.findById(req.params.id);
+    if (!appt) return res.status(404).json({ message: "Appointment not found" });
+
+    const provider = await Provider.findById(appt.providerId);
+
+    if (role === "provider" && appt.providerId.toString() !== authId) {
+      return res.status(403).json({ message: "Not your appointment" });
     }
 
-    const { id } = req.params;
-
-    // Fetch appointment FIRST (important for time check)
-    const appt = await Appointment.findById(id)
-      .populate("userId", "name email")
-      .populate("providerId", "name speciality");
-
-    if (!appt) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment not found."
-      });
-    }
-
-    // 15-minute approval rule
-    const startTime = new Date(appt.startTime); // appointment start time
-    const approvalDeadline = new Date(startTime.getTime() + 15 * 60 * 1000);
-
-    if (new Date() > approvalDeadline) {
-      return res.status(400).json({
-        success: false,
-        message: "Approval time exceeded. Please reschedule or reject."
-      });
-    }
-
-    // Approve appointment
     appt.status = "approved";
     await appt.save();
 
-    //  Notify user
     await Notification.create({
       userId: appt.userId,
-      message: `Your appointment with ${appt.providerId.name} has been approved.`
+      message: `Your appointment has been approved with ${provider.name}.`
     });
 
-    return res.json({
-      success: true,
-      message: "Appointment approved.",
-      data: appt
-    });
+    res.json({ message: "Appointment approved", appt });
 
   } catch (err) {
-    return res.status(err.status || 500).json({
-      success: false,
-      message: err.message
-    });
+    res.status(500).json({ message: err.message });
   }
 };
 
-/* UPDATED: Reject appointment + auto-unlock slot */
+/* =========================================================
+   REJECT APPOINTMENT (ADMIN + PROVIDER OWN)
+========================================================= */
 exports.rejectAppointment = async (req, res) => {
   try {
+    const role = getRole(req);
+    const authId = getAuthId(req);
+
     const appt = await Appointment.findById(req.params.id);
-    if (!appt) return res.status(404).json({ msg: "Appointment not found" });
+    if (!appt) return res.status(404).json({ message: "Appointment not found" });
+
+    const provider = await Provider.findById(appt.providerId);
+
+    if (role === "provider" && appt.providerId.toString() !== authId) {
+      return res.status(403).json({ message: "Not your appointment" });
+    }
 
     appt.status = "rejected";
     await appt.save();
 
-    // Unlock slot
-    const provider = await Provider.findById(appt.providerId);
-    if (provider && provider.weeklyAvailability.length) {
-      const dateStr = appt.start.toISOString().slice(0, 10);
-      const dayName = new Date(appt.start).toLocaleDateString("en-US", { weekday: "long" });
+     await Notification.create({
+      userId: appt.userId,
+      message: `Your appointment has been rejected with ${provider.name}.`
+    });
 
-      const dayAvailability = provider.weeklyAvailability.find(d => d.day === dayName);
-      if (dayAvailability) {
-        const slotTime = `${appt.start.toTimeString().slice(0,5)} - ${appt.end.toTimeString().slice(0,5)}`;
-        const slot = dayAvailability.slots.find(s => s.time === slotTime);
-        if (slot) slot.isBooked = false;
-        await provider.save();
-      }
-    }
+    res.json({ message: "Appointment rejected", appt });
 
-    res.json({ msg: "Appointment rejected & slot unlocked" });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 };
 
-// CANCEL APPOINTMENT
+/* =========================================================
+   CANCEL APPOINTMENT (ADMIN OR USER OWN)
+========================================================= */
 exports.cancelAppointment = async (req, res) => {
   try {
-    const { id } = req.params;
+    const role = getRole(req);
+    const authId = getAuthId(req);
 
-    const appt = await Appointment.findById(id)
-      .populate("userId", "name email")
-      .populate("providerId", "name speciality userId");
+    const appt = await Appointment.findById(req.params.id);
+    if (!appt) return res.status(404).json({ message: "Appointment not found" });
 
-    if (!appt) {
-      return res.status(404).json({
-        success: false,
-        message: "Appointment not found."
-      });
-    }
-
-    // User cannot cancel someone else's appointment
-    if (req.user.role !== "admin" && appt.userId._id.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        message: "You cannot cancel someone else's appointment."
-      });
+    if (role === "user" && appt.userId.toString() !== authId) {
+      return res.status(403).json({ message: "Not your appointment" });
     }
 
     appt.status = "cancelled";
     await appt.save();
 
-    // USER notification
     await Notification.create({
-      userId: appt.userId,
-      message: `Your appointment with ${appt.providerId.name} has been cancelled.`
+      providerId: appt.providerId,
+      message: `Appointment with ${req.user?.name || "a user"} was cancelled.`
     });
 
-    // PROVIDER notification → only when USER cancels
-    if (req.user.role !== "admin") {
-      const adminIds = await getAdminUserIds();
-      for (const adminId of adminIds) {
-        await Notification.create({
-          userId: adminId,
-          message: `${appt.userId.name} cancelled their appointment with ${appt.providerId.name}.`
-        });
-      }
-    }
-
-    return res.json({
-      success: true,
-      message: "Appointment cancelled.",
-      data: appt
-    });
+    res.json({ message: "Appointment cancelled" });
 
   } catch (err) {
-    return res.status(err.status || 500).json({
-      success: false,
-      message: err.message
-    });
+    res.status(500).json({ message: err.message });
   }
 };
 
-// RESCHEDULE APPOINTMENT
+/* =========================================================
+   RESCHEDULE (ADMIN + PROVIDER OWN + USER OWN)
+========================================================= */
 exports.rescheduleAppointment = async (req, res) => {
   try {
-    const appointmentId = req.params.id;
+    const role = getRole(req);
+    const authId = getAuthId(req);
     const { start, end } = req.body;
 
-    if (!start || !end) {
-      return res.status(400).json({ message: "Start and End time are required." });
+    const appointment = await Appointment.findById(req.params.id);
+    if (!appointment) return res.status(404).json({ message: "Appointment not found" });
+
+    if (
+      role === "user" &&
+      appointment.userId.toString() !== authId
+    ) {
+      return res.status(403).json({ message: "Not your appointment" });
     }
 
-    const startDate = new Date(start);
-    const endDate = new Date(end);
-
-    if (isNaN(startDate) || isNaN(endDate)) {
-      return res.status(400).json({ message: "Invalid date format." });
+    if (
+      role === "provider" &&
+      appointment.providerId.toString() !== authId
+    ) {
+      return res.status(403).json({ message: "Not your appointment" });
     }
 
-    if (endDate <= startDate) {
-      return res.status(400).json({ message: "End time must be greater than start time." });
-    }
+    const { startDate, endDate } = validateTime(start, end);
 
-    const appointment = await Appointment.findById(appointmentId)
-      .populate("providerId", "weeklyAvailability name")
-      .populate("userId", "name");
-
-    if (!appointment) {
-      return res.status(404).json({ message: "Appointment not found." });
-    }
-
-    // USER restriction
-    if (req.user.role !== "admin") {
-      if (appointment.userId._id.toString() !== req.user.id) {
-        return res.status(403).json({ message: "You cannot reschedule this appointment." });
-      }
-
-      if (["cancelled", "rejected"].includes(appointment.status)) {
-        return res
-          .status(400)
-          .json({ message: `${appointment.status} appointments cannot be rescheduled.` });
-      }
-    }
-
-    // Conflict check (excluding current appointment)
-    const conflict = await hasConflict(
-      appointment.providerId._id,
-      startDate,
-      endDate,
-      appointment._id
-    );
+    const conflict = await Appointment.findOne({
+      providerId: appointment.providerId,
+      _id: { $ne: appointment._id },
+      start: { $lt: endDate },
+      end: { $gt: startDate },
+      status: { $in: ["pending", "approved","rescheduled"] }
+    });
 
     if (conflict) {
-      return res.status(409).json({ message: "The selected time slot is not available." });
+      return res.status(409).json({ message: "Time conflict detected" });
     }
-
-    /* SLOT MANAGEMENT */
-
-    const provider = await Provider.findById(appointment.providerId._id);
-
-    // OLD SLOT
-    const oldStart = appointment.start;
-    const oldEnd = appointment.end;
-    const oldDay = oldStart.toLocaleDateString("en-US", { weekday: "long" });
-    const oldSlotTime = `${oldStart.toTimeString().slice(0, 5)} - ${oldEnd
-      .toTimeString()
-      .slice(0, 5)}`;
-
-    const oldDayAvailability = provider.weeklyAvailability.find(d => d.day === oldDay);
-    if (oldDayAvailability) {
-      const oldSlot = oldDayAvailability.slots.find(s => s.time === oldSlotTime);
-      if (oldSlot) oldSlot.isBooked = false; //UNLOCK OLD SLOT
-    }
-
-    // NEW SLOT
-    const newDay = startDate.toLocaleDateString("en-US", { weekday: "long" });
-    const newSlotTime = `${startDate.toTimeString().slice(0, 5)} - ${endDate
-      .toTimeString()
-      .slice(0, 5)}`;
-
-    const newDayAvailability = provider.weeklyAvailability.find(d => d.day === newDay);
-    if (!newDayAvailability) {
-      return res.status(400).json({ message: "Provider not available on selected day." });
-    }
-
-    const newSlot = newDayAvailability.slots.find(s => s.time === newSlotTime);
-    if (!newSlot || newSlot.isBooked) {
-      return res.status(409).json({ message: "New slot is already booked." });
-    }
-
-    newSlot.isBooked = true; // ✅ LOCK NEW SLOT
-
-    await provider.save();
-
-    /* =========================================================
-       UPDATE APPOINTMENT
-       ========================================================= */
 
     appointment.start = startDate;
     appointment.end = endDate;
-    appointment.status = req.user.role === "admin" ? "approved" : "pending";
+    appointment.status = role === "admin" || role === "provider" ? "approved" : "pending";
 
     await appointment.save();
-
-    /* =========================================================
-       NOTIFICATIONS
-       ========================================================= */
-
+     const provider = await Provider.findById(appointment.providerId);
     await Notification.create({
-      userId: appointment.userId._id,
-      message:
-        req.user.role === "admin"
-          ? "Your appointment has been rescheduled by admin and approved."
-          : "Your appointment has been rescheduled and is pending approval."
+      userId: appointment.userId,
+      message: `Your appointment with ${provider.name} has been rescheduled to ${startDate.toLocaleString()}.`
     });
 
-    if (req.user.role !== "admin") {
-      const adminIds = await getAdminUserIds();
-      for (const adminId of adminIds) {
-        await Notification.create({
-          userId: adminId,
-          message: `${appointment.userId.name} rescheduled their appointment.`
-        });
-      }
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Appointment rescheduled successfully.",
-      appointment
+    const user = await User.findById(appointment.userId);
+    await Notification.create({
+      providerId: appointment.providerId,
+      message: `Appointment with ${user.name} has been rescheduled to ${startDate.toLocaleString()}.`
     });
+    res.json({ message: "Appointment rescheduled", appointment });
 
   } catch (err) {
-    console.error(err);
-    return res.status(500).json({ message: err.message });
+    res.status(500).json({ message: err.message });
   }
 };
-
 
 // MARK MISSED APPOINTMENTS (SYSTEM JOB)
 exports.markMissedAppointments = async () => {
@@ -486,6 +370,11 @@ exports.markMissedAppointments = async () => {
       message: `Your appointment with ${appt.providerId.name} was missed. Please reschedule.`
     });
 
+    await Notification.create({
+      providerId: appt.providerId._id,
+      message: `Your appointment with ${appt.userId.name} was missed. Please reschedule.`
+    });
+
     // ADMIN notification
     const adminIds = await getAdminUserIds();
     for (const adminId of adminIds) {
@@ -498,107 +387,71 @@ exports.markMissedAppointments = async () => {
 };
 
 /* =========================================================
-   NEW: Get slots by selected date
-   ========================================================= */
-exports.getSlotsByDate = async (req, res) => {
-  try {
-    const { id } = req.params; // providerId
-    const { date } = req.query;
-
-    const provider = await Provider.findById(id);
-    if (!provider) {
-      return res.status(404).json({ msg: "Provider not found" });
-    }
-
-    if (provider.unavailableDates.includes(date)) {
-      return res.json({ slots: [] });
-    }
-
-    const dayName = new Date(date).toLocaleDateString("en-US", {
-      weekday: "long",
-    });
-
-    const availability = provider.weeklyAvailability.find(
-      (d) => d.day === dayName
-    );
-
-    if (!availability) {
-      return res.json({ slots: [] });
-    }
-
-    // 🔥 FETCH APPROVED APPOINTMENTS FOR THIS DATE
-    const startOfDay = new Date(`${date}T00:00:00`);
-    const endOfDay = new Date(`${date}T23:59:59`);
-
-    const approvedAppointments = await Appointment.find({
-      providerId: id,
-      status: "approved",
-      start: { $lt: endOfDay },
-      end: { $gt: startOfDay },
-    });
-
-    const slots = availability.slots.map(slot => {
-      const [startTime, endTime] = slot.time.split(" - ");
-
-      const slotStart = new Date(`${date}T${startTime}:00`);
-      const slotEnd = new Date(`${date}T${endTime}:00`);
-
-      const isBlocked = approvedAppointments.some(appt =>
-        slotStart < appt.end && slotEnd > appt.start
-      );
-
-      return {
-        ...slot.toObject(),
-        isBooked: slot.isBooked || isBlocked
-      };
-    });
-
-    res.json({
-      day: dayName,
-      slots,
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
-
-
-/* =========================================================
    UPDATED: Book a slot with strict date/slot validation
    ========================================================= */
 exports.bookSlot = async (req, res) => {
   try {
-    const { providerId, day, slotTime, date } = req.body;
+    const { providerId, slotTime, date } = req.body;
 
-    if (!date) return res.status(400).json({ msg: "Date is required" });
+    if (!providerId || !date || !slotTime) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
+
+    const day = new Date(date).toLocaleDateString("en-US", {
+      weekday: "long",
+    });
 
     const provider = await Provider.findById(providerId);
-    if (!provider) return res.status(404).json({ msg: "Provider not found" });
+    if (!provider) {
+      return res.status(404).json({ message: "Provider not found" });
+    }
 
-    // Unavailable date check
-    if (provider.unavailableDates.includes(date)) {
+    // 1ï¸âƒ£ Check unavailable dates
+    if (provider.unavailableDates?.includes(date)) {
       return res.status(400).json({ msg: "Provider not available on this date" });
     }
 
-    // Weekly availability
-    const dayAvailability = provider.weeklyAvailability.find(d => d.day === day);
-    if (!dayAvailability) return res.status(400).json({ msg: "No availability for this day" });
+    // 2ï¸âƒ£ Check weekly template
+    const dayAvailability = provider.weeklyAvailability.find(
+      (d) => d.day === day
+    );
 
-    const slot = dayAvailability.slots.find(s => s.time === slotTime);
-    if (!slot || slot.isBooked) return res.status(400).json({ msg: "Slot not available" });
+    if (!dayAvailability) {
+      return res.status(400).json({ msg: "No availability for this day" });
+    }
 
-    // Restrict past/ended slots
+    const slotExists = dayAvailability.slots.find(
+      (s) => s.time === slotTime
+    );
+
+    if (!slotExists) {
+      return res.status(400).json({ msg: "Slot does not exist" });
+    }
+
+    // 3ï¸âƒ£ Time validation
     const today = new Date();
-    const slotStart = new Date(`${date}T${slotTime.split(" - ")[0]}:00`);
-    const slotEnd = new Date(`${date}T${slotTime.split(" - ")[1]}:00`);
-    if (slotEnd <= today) return res.status(400).json({ msg: "Cannot select ended slot" });
+    const [startTime, endTime] = slotTime.split(" - ");
 
-    // Mark slot booked
-    slot.isBooked = true;
-    await provider.save();
+    const slotStart = new Date(`${date}T${startTime}:00`);
+    const slotEnd = new Date(`${date}T${endTime}:00`);
 
-    // Create appointment
+    if (slotEnd <= today) {
+      return res.status(400).json({ msg: "Cannot select ended slot" });
+    }
+
+    // 4ï¸âƒ£ Check if already booked (IMPORTANT FIX)
+    const existingAppointment = await Appointment.findOne({
+      providerId,
+      start: slotStart,
+      end: slotEnd,
+      status: { $in: ["pending", "approved"] }
+    });
+
+    if (existingAppointment) {
+      return res.status(400).json({ msg: "Slot already booked" });
+    }
+
+    // 5ï¸âƒ£ Create appointment (DO NOT modify weeklyAvailability)
     const appointment = await Appointment.create({
       providerId,
       userId: req.user._id,
@@ -607,24 +460,32 @@ exports.bookSlot = async (req, res) => {
       status: "pending"
     });
 
-    // Notifications
+    // 6ï¸âƒ£ Notifications
     await Notification.create({
       userId: req.user._id,
       message: `Your appointment with ${provider.name} is pending approval.`
     });
 
+    await Notification.create({
+      providerId,
+      message: `${req.user.name} booked an appointment. Approval required.`
+    });
+
     const admins = await User.find({ role: "admin" });
-    for (const admin of admins) {
-      await Notification.create({
-        userId: admin._id,
-        message: `${req.user.name} booked an appointment with ${provider.name}.`
-      });
-    }
+
+    await Promise.all(
+      admins.map(admin =>
+        Notification.create({
+          userId: admin._id,
+          message: `${req.user.name} booked an appointment with ${provider.name}.`
+        })
+      )
+    );
 
     res.json({ msg: "Slot booked successfully", appointment });
 
   } catch (error) {
-    console.error(error);
+    console.error("BOOK SLOT ERROR:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -667,7 +528,7 @@ exports.unlockSlot = async (req, res) => {
       return res.status(404).json({ msg: "Slot not found" });
     }
 
-    slot.isBooked = false; // ✅ UNLOCK
+    slot.isBooked = false; // âœ… UNLOCK
     await provider.save();
 
     res.json({ msg: "Slot unlocked successfully" });
@@ -675,3 +536,4 @@ exports.unlockSlot = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+

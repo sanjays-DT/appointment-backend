@@ -258,7 +258,7 @@ exports.unlockSlot = async (req, res) => {
       return res.status(404).json({ msg: "Slot not found" });
     }
 
-    slot.isBooked = false; // ✅ UNLOCK
+    slot.isBooked = false;
     await provider.save();
 
     res.json({ msg: "Slot unlocked successfully" });

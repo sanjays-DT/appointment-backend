@@ -3,44 +3,49 @@ const router = express.Router();
 const multer = require("multer");
 const providerController = require("../controllers/providerController");
 
-const { protect, adminOnly } = require("../middlewares/authMiddleware");
-const { protectProvider, providerApprovedOnly } = require("../middlewares/providerAuth");
-
+const {
+  protect,
+  adminOnly,
+  providerOnly,
+  providerApprovedOnly,
+  providerOwnership,
+  authorizeRoles
+} = require("../middlewares/authMiddleware");
 const upload = multer({ storage: multer.memoryStorage() });
 
-/* =====================
-   PROVIDER AUTH ROUTES
-   ===================== */
+
+// PROVIDER AUTH ROUTES
 router.post("/auth/register", upload.single("avatar"), providerController.registerProvider);
-router.post("/auth/login", providerController.loginProvider);
-router.post("/auth/forgot-password", providerController.forgotPassword);
-router.post("/auth/reset-password", providerController.resetPassword);
+router.get("/:id/slots", providerController.getProviderSlots);
 
-/* =====================
-   PROVIDER DASHBOARD ROUTES (JWT-protected)
-   ===================== */
-router.get("/dashboard", protectProvider, providerApprovedOnly, providerController.getProviderDashboard);
-router.get("/dashboard/appointments", protectProvider, providerController.getProviderAppointments);
-router.put("/dashboard/availability", protectProvider, providerController.setAvailability);
-router.put("/dashboard/unavailable-dates", protectProvider, providerController.addUnavailableDates);
+//  PROVIDER DASHBOARD ROUTES (JWT-protected)
+router.get(
+  "/dashboard",
+  protect,
+  providerOnly,
+  providerApprovedOnly,
+  providerController.getProviderDashboard
+);
+router.get("/:id/dashboard-stats", protect, providerOnly, providerApprovedOnly, providerController.getProviderDashboardStats);
 
 
-/* =====================
-   ADMIN APPROVAL ROUTES
-   ===================== */
+// ADMIN APPROVAL ROUTES
 router.put("/admin/approve/:id", protect, adminOnly, providerController.approveProvider);
-router.put("/admin/approve-forgot-password", protect, adminOnly, providerController.approveForgotPassword);
-/* =====================
-   EXISTING ADMIN / CRUD ROUTES
-   ===================== */
+
+// EXISTING ADMIN / CRUD ROUTES
 router.post("/", upload.single("avatar"), protect, adminOnly, providerController.createProvider);
-router.put("/:id", upload.single("avatar"), protect, adminOnly, providerController.updateProvider);
+router.put("/preferences", protect , providerController.updatePreferences);
+router.get("/preferences", protect, providerController.getPreferences);
+router.put("/:id", upload.single("avatar"), protect, authorizeRoles("admin", "provider"),providerOwnership,providerController.updateProvider);
 router.get("/:id/avatar", providerController.getProviderAvatar);
 router.get("/", protect, providerController.getProviders);
 router.get("/:id", protect,providerController.getProviderById);
 router.delete("/:id", protect, adminOnly, providerController.deleteProvider);
 
-router.put("/:id/availability", protect, adminOnly, providerController.setAvailability);
-router.put("/:id/unavailable-dates", protect, adminOnly, providerController.addUnavailableDates);
+router.put("/:id/availability",protect,providerOnly,providerOwnership,providerController.setAvailability);
+router.get("/:id/availability", providerController.getAvailability);
+router.put("/:id/unavailable-dates", protect, providerOwnership, providerController.setUnavailableDates);
+router.get("/:id/unavailable-dates", protect, providerOwnership, providerController.getUnavailableDates);
+router.delete("/:id/unavailable-dates", protect, providerOwnership, providerController.removeUnavailableDate);
 
 module.exports = router;

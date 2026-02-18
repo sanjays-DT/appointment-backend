@@ -1,9 +1,19 @@
 const Notification = require("../models/Notification");
+function getRecipientQuery(req) {
+  if (req.user) return { userId: req.user.id };
+  if (req.provider) return { providerId: req.provider.id };
+  return null;
+}
 
 // Get all notifications for logged-in user (owner only)
 exports.getMyNotifications = async (req, res) => {
   try {
-    const notifications = await Notification.find({ userId: req.user.id })
+    const recipientQuery = getRecipientQuery(req);
+    if (!recipientQuery) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+
+    const notifications = await Notification.find(recipientQuery)
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -22,8 +32,13 @@ exports.getMyNotifications = async (req, res) => {
 // Mark one notification as read
 exports.markAsRead = async (req, res) => {
   try {
+    const recipientQuery = getRecipientQuery(req);
+    if (!recipientQuery) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+
     const notif = await Notification.findOneAndUpdate(
-      { _id: req.params.id, userId: req.user.id },  // owner only
+      { _id: req.params.id, ...recipientQuery },  // owner only
       { read: true },
       { new: true }
     );
@@ -52,8 +67,13 @@ exports.markAsRead = async (req, res) => {
 // Mark ALL notifications as read
 exports.markAllAsRead = async (req, res) => {
   try {
+    const recipientQuery = getRecipientQuery(req);
+    if (!recipientQuery) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+
     await Notification.updateMany(
-      { userId: req.user.id },
+      recipientQuery,
       { read: true }
     );
 
@@ -73,9 +93,14 @@ exports.markAllAsRead = async (req, res) => {
 // Delete one notification
 exports.deleteNotification = async (req, res) => {
   try {
+    const recipientQuery = getRecipientQuery(req);
+    if (!recipientQuery) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+
     const deleted = await Notification.findOneAndDelete({
       _id: req.params.id,
-      userId: req.user.id // owner only
+      ...recipientQuery // owner only
     });
 
     if (!deleted) {
@@ -101,7 +126,12 @@ exports.deleteNotification = async (req, res) => {
 // Delete ALL notifications
 exports.clearAllNotifications = async (req, res) => {
   try {
-    await Notification.deleteMany({ userId: req.user.id });
+    const recipientQuery = getRecipientQuery(req);
+    if (!recipientQuery) {
+      return res.status(401).json({ success: false, message: "Not authorized" });
+    }
+
+    await Notification.deleteMany(recipientQuery);
 
     res.status(200).json({
       success: true,
@@ -115,3 +145,4 @@ exports.clearAllNotifications = async (req, res) => {
     });
   }
 };
+
