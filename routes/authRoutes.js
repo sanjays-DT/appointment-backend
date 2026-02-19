@@ -8,6 +8,7 @@ const {
   checkForgotApproval,
   resetPassword,
   adminApproveRequest,
+  adminResetRequests,
 } = require("../controllers/authController.js");
 
 const { protect, adminOnly } = require("../middlewares/authMiddleware.js"); // protect routes
@@ -22,5 +23,7 @@ router.post("/forgot-password/reset", resetPassword);
 
 // admin
 router.post("/admin/approve-request", protect, adminOnly, adminApproveRequest);
+router.get("/admin/reset-requests", protect, adminOnly, adminResetRequests);
 
 module.exports = router;
+

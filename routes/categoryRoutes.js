@@ -12,7 +12,7 @@ const {
 
 
 router.get("/:id/image", getCategoryImage);
-router.get("/", protect, getCategories);
+router.get("/",  getCategories);
 
 
 module.exports = router;

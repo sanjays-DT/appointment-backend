@@ -19,31 +19,47 @@ const providerSchema = new mongoose.Schema({
   city: { type: String, required: true },
 
   weeklyAvailability: [
-    {
-      day: String,
-      startTime: String,
-      endTime: String,
-      slots: [
-        {
-          time: String,
-          isBooked: { type: Boolean, default: false },
-          _id: false
-        }
-      ],
-      _id: false
-    }
-  ]
-  ,
-  unavailableDates: {
-    type: [String],
-    default: [],
-    _id: false
-  },
+  {
+    day: String,
+    slots: [
+      {
+        time: String,
+        isBooked: { type: Boolean, default: false }
+      }
+    ]
+  }
+],
+
+dateOverrides: [
+  {
+    date: String, // 2026-02-06
+    slots: [
+      {
+        time: String,
+        isAvailable: { type: Boolean, default: true }
+      }
+    ]
+  }
+],
+unavailableDates: [
+  {
+    type: String, 
+  }
+],
+  // preferences
+  preferences: {
+      theme: {
+        type: String,
+        enum: ["light", "dark"],
+        default: "light",
+      },
+    },
+
    /* ============ AUTH FIELDS ============ */
     email: {
       type: String,
+      required: true,
       unique: true,
-      sparse: true, // IMPORTANT for existing providers
       lowercase: true,
       trim: true
     },
@@ -57,20 +73,21 @@ const providerSchema = new mongoose.Schema({
       default: false
     },
     forgotPassword: {
-  status: {
-    type: String,
-    enum: ["NONE", "PENDING", "APPROVED"],
-    default: "NONE",
-  },
-  requestedAt: {
-    type: Date,
-    default: null,
-  },
-  approvedAt: {
-    type: Date,
-    default: null,
-  },
-}
+      status: {
+        type: String,
+        enum: ["NONE", "PENDING", "APPROVED"],
+        default: "NONE",
+      },
+      requestedAt: {
+        type: Date,
+        default: null,
+      },
+      approvedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+    role: { type: String , default: "provider" },
 });
 
 module.exports = mongoose.model("Provider", providerSchema);

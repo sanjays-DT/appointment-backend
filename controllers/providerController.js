@@ -1,9 +1,9 @@
 const Provider = require("../models/Provider");
+const mongoose = require("mongoose");
+const Appointment = require("../models/Appointment");
 const bcrypt = require("bcrypt");
 const generateToken = require("../utils/generateToken");
 const { validateName, validateEmail, validatePassword } = require("../utils/validators");
-
-const THIRTY_MIN = 30 * 60 * 1000; // 30 minutes
 
 /* ======================
    SLOT GENERATOR
@@ -108,6 +108,7 @@ exports.getProviderAvatar = async (req, res) => {
     res.set("Content-Type", provider.avatar.contentType);
     res.send(provider.avatar.data);
   } catch (err) {
+    console.error("Avatar fetch error â†’", err);
     res.status(500).json({ message: err.message });
   }
 };
@@ -125,47 +126,126 @@ exports.deleteProvider = async (req, res) => {
   }
 };
 
-/* ======================
-   SET WEEKLY AVAILABILITY
-   ====================== */
 exports.setAvailability = async (req, res) => {
   try {
     const provider = await Provider.findById(req.params.id);
-    if (!provider) return res.status(404).json({ message: "Provider not found" });
+    if (!provider)
+      return res.status(404).json({ message: "Provider not found" });
 
-    const { availability } = req.body;
-    if (!Array.isArray(availability)) return res.status(400).json({ message: "availability must be an array" });
+    const { weeklyAvailability, dateOverrides } = req.body;
 
-    provider.weeklyAvailability = availability.map((item) => ({
-      day: item.day,
-      slots: generateSlots(item.startTime, item.endTime, item.slotMinutes),
-    }));
+    // 1ï¸âƒ£ Update Weekly Template
+    if (Array.isArray(weeklyAvailability)) {
+      provider.weeklyAvailability = weeklyAvailability.map(item => ({
+        day: item.day,
+        slots: generateSlots(
+          item.startTime,
+          item.endTime,
+          item.slotMinutes
+        ),
+      }));
+    }
+
+    // 2ï¸âƒ£ Update Date Overrides
+    if (Array.isArray(dateOverrides)) {
+      provider.dateOverrides = dateOverrides.map(d => ({
+        date: d.date,
+        slots: d.slots.map(s => ({
+          time: s.time,
+          isAvailable: s.isAvailable,
+        })),
+      }));
+    }
 
     await provider.save();
-    res.json({ message: "Weekly availability updated", weeklyAvailability: provider.weeklyAvailability });
+
+    res.json({
+      message: "Availability updated successfully",
+      weeklyAvailability: provider.weeklyAvailability,
+      dateOverrides: provider.dateOverrides,
+    });
+
   } catch (err) {
+    console.error("Set availability error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-/* ======================
-   UNAVAILABLE DATES
-   ====================== */
-exports.addUnavailableDates = async (req, res) => {
+
+exports.getAvailability = async (req, res) => {
   try {
-    const provider = await Provider.findById(req.params.id);
-    if (!provider) return res.status(404).json({ message: "Provider not found" });
+    const { id } = req.params;
+    const { date } = req.query;
 
-    const { unavailableDates } = req.body;
-    if (!Array.isArray(unavailableDates)) return res.status(400).json({ message: "unavailableDates must be an array" });
+    if (!date) {
+      return res.status(400).json({ message: "Date is required" });
+    }
 
-    const uniqueDates = unavailableDates.filter(date => !provider.unavailableDates.includes(date));
-    provider.unavailableDates.push(...uniqueDates);
+    const provider = await Provider.findById(id);
+    if (!provider) {
+      return res.status(404).json({ message: "Provider not found" });
+    }
 
-    await provider.save();
-    res.json({ message: "Unavailable dates added", provider });
+    //  Check full-day unavailability
+    if (provider.unavailableDates?.includes(date)) {
+      return res.json({
+        slots: [],
+        message: "Provider unavailable on this date"
+      });
+    }
+
+    const selectedDate = new Date(date);
+    const dayName = selectedDate.toLocaleDateString("en-US", {
+      weekday: "long",
+    });
+
+    const weekly = provider.weeklyAvailability.find(
+      d => d.day === dayName
+    );
+
+    if (!weekly) {
+      return res.json({
+        date,
+        slots: [],
+      });
+    }
+
+    // 1ï¸âƒ£ Start with weekly slots
+    let finalSlots = weekly.slots.map(s => ({
+      time: s.time,
+      available: !s.isBooked,
+    }));
+
+    // 2ï¸âƒ£ Check if date override exists
+    const override = provider.dateOverrides.find(
+      d => d.date === date
+    );
+
+    if (override) {
+      finalSlots = finalSlots.map(slot => {
+        const overrideSlot = override.slots.find(
+          o => o.time === slot.time
+        );
+
+        if (overrideSlot) {
+          return {
+            time: slot.time,
+            available: overrideSlot.isAvailable,
+          };
+        }
+
+        return slot;
+      });
+    }
+
+    res.json({
+      date,
+      slots: finalSlots,
+    });
+
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("Availability error:", err);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -182,29 +262,13 @@ exports.registerProvider = async (req, res) => {
 
     const provider = new Provider({
       name, email, password: await bcrypt.hash(password, 10),
-      categoryId, speciality, city, hourlyPrice, address, isApproved: false,
+      categoryId, speciality, city, hourlyPrice, address, isApproved: false, role: "provider",
     });
 
     if (req.file) provider.avatar = { data: req.file.buffer, contentType: req.file.mimetype };
 
     await provider.save();
     res.status(201).json({ message: "Registered successfully. Wait for admin approval.", provider: { id: provider._id, name: provider.name, email: provider.email, isApproved: provider.isApproved } });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-exports.loginProvider = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const provider = await Provider.findOne({ email });
-    if (!provider) return res.status(400).json({ message: "Invalid credentials" });
-
-    if (!(await bcrypt.compare(password, provider.password))) return res.status(400).json({ message: "Invalid credentials" });
-    if (!provider.isApproved) return res.status(403).json({ message: "Admin approval required" });
-
-    const token = generateToken({ id: provider._id, role: "provider", email: provider.email });
-    res.json({ message: "Login successful", token, provider: { id: provider._id, name: provider.name, email: provider.email, avatar: !!provider.avatar } });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -224,87 +288,6 @@ exports.getProviderDashboard = async (req, res) => {
   }
 };
 
-exports.getProviderAppointments = async (req, res) => {
-  try {
-    res.json({ message: "Return provider appointments here" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-/* ======================
-   PROVIDER FORGOT PASSWORD FLOW
-   ====================== */
-exports.forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
-    const emailError = validateEmail(email);
-    if (emailError) return res.status(400).json({ message: emailError });
-
-    const provider = await Provider.findOne({ email });
-    if (!provider) return res.status(404).json({ message: "Provider not found" });
-
-    if (!provider.forgotPassword) provider.forgotPassword = { status: "NONE", requestedAt: null, approvedAt: null };
-
-    // Check pending
-    if (provider.forgotPassword.status === "PENDING") {
-      const minutesPassed = Math.floor((Date.now() - new Date(provider.forgotPassword.requestedAt)) / 60000);
-      if (minutesPassed < 30) return res.status(400).json({ message: `Request pending. Wait ${30 - minutesPassed} more minutes.`, status: "PENDING" });
-    }
-
-    provider.forgotPassword.status = "PENDING";
-    provider.forgotPassword.requestedAt = new Date();
-    provider.forgotPassword.approvedAt = null;
-
-    await provider.save();
-    res.json({ message: "Password reset request submitted. Wait for admin approval or auto-approval in 30 minutes.", status: "PENDING", requestedAt: provider.forgotPassword.requestedAt });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-exports.resetPassword = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: "Email and password required" });
-
-    const provider = await Provider.findOne({ email });
-    if (!provider) return res.status(404).json({ message: "Provider not found" });
-
-    const passwordError = validatePassword(password);
-    if (passwordError) return res.status(400).json({ message: passwordError });
-
-    if (!provider.forgotPassword || provider.forgotPassword.status !== "APPROVED") return res.status(403).json({ message: "Not approved yet" });
-
-    provider.password = await bcrypt.hash(password, 10);
-    provider.forgotPassword = { status: "NONE", requestedAt: null, approvedAt: null };
-    await provider.save();
-
-    res.json({ message: "Password updated successfully. Please login." });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-exports.approveForgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ message: "Email required" });
-
-    const provider = await Provider.findOne({ email });
-    if (!provider) return res.status(404).json({ message: "Provider not found" });
-
-    if (!provider.forgotPassword || provider.forgotPassword.status !== "PENDING") return res.status(400).json({ message: "No pending forgot-password request" });
-
-    provider.forgotPassword.status = "APPROVED";
-    provider.forgotPassword.approvedAt = new Date();
-    await provider.save();
-
-    res.json({ message: "Forgot-password request approved" });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
 
 exports.approveProvider = async (req, res) => {
   try {
@@ -320,24 +303,337 @@ exports.approveProvider = async (req, res) => {
   }
 };
 
-exports.getForgotPasswordStatus = async (req, res) => {
+
+exports.getProviderDashboardStats = async (req, res) => {
   try {
-    const { email } = req.query;
-    if (!email) return res.status(400).json({ status: "NONE" });
+    const providerId = req.params.id;
 
-    const provider = await Provider.findOne({ email });
-    if (!provider || !provider.forgotPassword || provider.forgotPassword.status === "NONE") return res.json({ status: "NONE" });
-
-    // Auto-approve after 30 min
-    if (provider.forgotPassword.status === "PENDING" && Date.now() - new Date(provider.forgotPassword.requestedAt) >= THIRTY_MIN) {
-      provider.forgotPassword.status = "APPROVED";
-      provider.forgotPassword.approvedAt = new Date();
-      await provider.save();
+    if (!mongoose.Types.ObjectId.isValid(providerId)) {
+      return res.status(400).json({ message: "Invalid provider ID" });
     }
 
-    const remainingTime = provider.forgotPassword.status === "PENDING" ? THIRTY_MIN - (Date.now() - new Date(provider.forgotPassword.requestedAt)) : 0;
-    res.json({ status: provider.forgotPassword.status, remainingTime });
+    const providerObjectId = new mongoose.Types.ObjectId(providerId);
+
+    // ---- ISO WEEK RANGE (Safe) ----
+    const now = new Date();
+    const day = now.getUTCDay() || 7; // Sunday fix
+    const startOfWeek = new Date(now);
+    startOfWeek.setUTCDate(now.getUTCDate() - day + 1);
+    startOfWeek.setUTCHours(0, 0, 0, 0);
+
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setUTCDate(startOfWeek.getUTCDate() + 6);
+    endOfWeek.setUTCHours(23, 59, 59, 999);
+
+    // ---- Parallel Queries ----
+    const [
+      totalAppointments,
+      cancelled,
+      thisWeek,
+      bookingsPerWeek
+    ] = await Promise.all([
+
+      // Total non-cancelled
+      Appointment.countDocuments({
+        providerId: providerObjectId,
+        status: { $ne: "cancelled" }
+      }),
+
+      // Cancelled
+      Appointment.countDocuments({
+        providerId: providerObjectId,
+        status: "cancelled"
+      }),
+
+      // This Week Bookings
+      Appointment.countDocuments({
+        providerId: providerObjectId,
+        start: { $gte: startOfWeek, $lte: endOfWeek },
+        status: { $ne: "cancelled" }
+      }),
+
+      // Weekly Aggregation
+      Appointment.aggregate([
+        {
+          $match: {
+            providerId: providerObjectId,
+            start: { $exists: true },
+            status: { $ne: "cancelled" }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              year: { $isoWeekYear: "$start" },
+              week: { $isoWeek: "$start" }
+            },
+            total: { $sum: 1 }
+          }
+        },
+        { $sort: { "_id.year": 1, "_id.week": 1 } },
+        {
+          $project: {
+            _id: 0,
+            label: {
+              $concat: [
+                { $toString: "$_id.year" },
+                "-W",
+                { $toString: "$_id.week" }
+              ]
+            },
+            value: "$total"
+          }
+        }
+      ])
+    ]);
+
+    return res.json({
+      providerId,
+      totalAppointments,
+      cancelled,
+      thisWeek,
+      weeklyBookings: bookingsPerWeek
+    });
+
   } catch (err) {
-    res.status(500).json({ status: "ERROR" });
+    console.error("Dashboard Stats Error:", err);
+    return res.status(500).json({ message: "Internal Server Error" });
   }
 };
+
+
+// Get provider's available slots for a specific date
+exports.getProviderSlots = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.query;
+
+    if (!id || !date) {
+      return res.status(400).json({ message: "Missing providerId or date" });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid provider id" });
+    }
+
+    const provider = await Provider.findById(id);
+    if (!provider) {
+      return res.status(404).json({ message: "Provider not found" });
+    }
+
+    if (provider.unavailableDates?.includes(date)) {
+  return res.json({
+    slots: [],
+    isUnavailable: true
+  });
+}
+
+    // Get weekday name
+    const day = new Date(date).toLocaleDateString("en-US", {
+      weekday: "long",
+    });
+
+    const dayAvailability = provider.weeklyAvailability.find(
+      (d) => d.day === day
+    );
+
+    if (!dayAvailability) {
+      return res.json({ slots: [] });
+    }
+
+    // ðŸ”¹ Get date overrides (manual changes)
+    const override = provider.dateOverrides?.find(
+      (d) => d.date === date
+    );
+
+    // ðŸ”¹ Get booked appointments
+    const bookedAppointments = await Appointment.find({
+      providerId: id,
+      start: {
+        $gte: new Date(`${date}T00:00:00`),
+        $lte: new Date(`${date}T23:59:59`)
+      },
+      status: { $in: ["pending", "approved"] }
+    });
+
+    const slots = dayAvailability.slots.map(slot => {
+      const [startTime] = slot.time.split(" - ");
+      const slotStart = new Date(`${date}T${startTime}:00`);
+
+      const isBooked = bookedAppointments.some(
+        appt => appt.start.getTime() === slotStart.getTime()
+      );
+
+      // ðŸ”¹ Check override
+      const overrideSlot = override?.slots?.find(
+        (s) => s.time === slot.time
+      );
+
+      let isAvailable = true; // âœ… GREEN by default
+
+      if (overrideSlot) {
+        isAvailable = overrideSlot.isAvailable;
+      }
+
+      // ðŸš¨ Booking always overrides everything
+      if (isBooked) {
+        isAvailable = false;
+      }
+
+      return {
+        time: slot.time,
+        isBooked,
+        isAvailable
+      };
+    });
+
+    res.json({ slots });
+
+  } catch (error) {
+    console.error("GET SLOTS ERROR:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// Add unavailable dates 
+/* ======================
+   SET UNAVAILABLE DATES
+   ====================== */
+exports.setUnavailableDates = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dates } = req.body; // array of "YYYY-MM-DD"
+
+    if (!Array.isArray(dates)) {
+      return res.status(400).json({ message: "Dates must be an array" });
+    }
+
+    const provider = await Provider.findById(id);
+    if (!provider) {
+      return res.status(404).json({ message: "Provider not found" });
+    }
+
+    provider.unavailableDates = dates;
+    await provider.save();
+
+    res.json({
+      message: "Unavailable dates updated",
+      unavailableDates: provider.unavailableDates,
+    });
+
+  } catch (err) {
+    console.error("Set unavailable dates error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+exports.getUnavailableDates = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const provider = await Provider.findById(id).select("unavailableDates");
+
+    if (!provider) {
+      return res.status(404).json({ message: "Provider not found" });
+    }
+
+    res.json({
+      unavailableDates: provider.unavailableDates || [],
+    });
+
+  } catch (err) {
+    console.error("Get unavailable dates error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+exports.removeUnavailableDate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { date } = req.body; // single date string "YYYY-MM-DD"
+
+    if (!date) {
+      return res.status(400).json({ message: "Date is required" });
+    }
+
+    const provider = await Provider.findById(id);
+    if (!provider) {
+      return res.status(404).json({ message: "Provider not found" });
+    }
+
+    provider.unavailableDates = provider.unavailableDates.filter(
+      (d) => d !== date
+    );
+
+    await provider.save();
+
+    res.json({
+      message: "Date removed from unavailable list",
+      unavailableDates: provider.unavailableDates,
+    });
+
+  } catch (err) {
+    console.error("Remove unavailable date error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// ================= GET USER PREFERENCES =================
+exports.getPreferences = async (req, res) => {
+  try {
+    // Make sure to fetch the full document including preferences
+    const provider = await Provider.findById(req.provider._id).select("preferences");
+
+    if (!provider) {
+      return res.status(404).json({ ok: false, error: "Provider not found" });
+    }
+
+    // Always return theme, default to 'light' if missing
+    return res.json({ theme: provider.preferences?.theme || "light" });
+  } catch (err) {
+    console.error("Get Preferences Error:", err);
+    return res.status(500).json({ ok: false, error: "Server error" });
+  }
+};
+
+exports.updatePreferences = async (req, res) => {
+  try {
+    const { theme } = req.body;
+
+    // Validate theme
+    if (!["light", "dark"].includes(theme)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid theme value",
+      });
+    }
+
+    // Find provider
+    const provider = await Provider.findById(req.provider._id).select("preferences");
+
+    if (!provider) {
+      return res.status(404).json({
+        ok: false,
+        error: "Provider not found",
+      });
+    }
+
+    // Initialize preferences object if missing
+    provider.preferences = provider.preferences || {};
+    provider.preferences.theme = theme;
+
+    await provider.save();
+
+    return res.json({
+      ok: true,
+      theme: provider.preferences.theme,
+    });
+  } catch (err) {
+    console.error("Update Preferences Error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+    });
+  }
+};
+
