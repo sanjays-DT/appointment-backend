@@ -241,7 +241,7 @@ exports.rejectAppointment = async (req, res) => {
     appt.status = "rejected";
     await appt.save();
 
-     await Notification.create({
+    await Notification.create({
       userId: appt.userId,
       message: `Your appointment has been rejected with ${provider.name}.`
     });
@@ -316,7 +316,7 @@ exports.rescheduleAppointment = async (req, res) => {
       _id: { $ne: appointment._id },
       start: { $lt: endDate },
       end: { $gt: startDate },
-      status: { $in: ["pending", "approved","rescheduled"] }
+      status: { $in: ["pending", "approved", "rescheduled"] }
     });
 
     if (conflict) {
@@ -328,7 +328,7 @@ exports.rescheduleAppointment = async (req, res) => {
     appointment.status = role === "admin" || role === "provider" ? "approved" : "pending";
 
     await appointment.save();
-     const provider = await Provider.findById(appointment.providerId);
+    const provider = await Provider.findById(appointment.providerId);
     await Notification.create({
       userId: appointment.userId,
       message: `Your appointment with ${provider.name} has been rescheduled to ${startDate.toLocaleString()}.`
@@ -350,12 +350,12 @@ exports.rescheduleAppointment = async (req, res) => {
 exports.markMissedAppointments = async () => {
   const now = new Date();
 
-  
+
   const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
 
   const missedAppointments = await Appointment.find({
     status: "pending",
-    start: { $lt: fifteenMinutesAgo } 
+    start: { $lt: fifteenMinutesAgo }
   })
     .populate("userId", "name")
     .populate("providerId", "name");
@@ -432,8 +432,8 @@ exports.bookSlot = async (req, res) => {
     const today = new Date();
     const [startTime, endTime] = slotTime.split(" - ");
 
-    const slotStart = new Date(`${date}T${startTime}:00`);
-    const slotEnd = new Date(`${date}T${endTime}:00`);
+    const slotStart = new Date(`${date}T${startTime}:00+05:30`);
+    const slotEnd = new Date(`${date}T${endTime}:00+05:30`);
 
     if (slotEnd <= today) {
       return res.status(400).json({ msg: "Cannot select ended slot" });
