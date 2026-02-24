@@ -327,17 +327,27 @@ exports.rescheduleAppointment = async (req, res) => {
     appointment.end = endDate;
     appointment.status = role === "admin" || role === "provider" ? "approved" : "pending";
 
+    const formattedTime = startDate.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true
+    });
+
     await appointment.save();
     const provider = await Provider.findById(appointment.providerId);
     await Notification.create({
       userId: appointment.userId,
-      message: `Your appointment with ${provider.name} has been rescheduled to ${startDate.toLocaleString()}.`
+      message: `Your appointment with ${provider.name} has been rescheduled to ${formattedTime}.`
     });
 
     const user = await User.findById(appointment.userId);
     await Notification.create({
       providerId: appointment.providerId,
-      message: `Appointment with ${user.name} has been rescheduled to ${startDate.toLocaleString()}.`
+      message: `Appointment with ${user.name} has been rescheduled to ${formattedTime}.`
     });
     res.json({ message: "Appointment rescheduled", appointment });
 
