@@ -13,7 +13,7 @@ app.use(cors({
     "http://localhost:2000",
     "https://appointment-frontend-6jd3.vercel.app",
     "https://appointment-frontend-admin-vn4f.vercel.app",
-    "https://appointment-provider.vercel.app"
+    "https://appointment-provider-2004.vercel.app"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
