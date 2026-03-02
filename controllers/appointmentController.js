@@ -431,13 +431,13 @@ exports.bookSlot = async (req, res) => {
     }
 
     //  Time validation
-    const today = new Date();
+    const now = new Date().getTime();
     const [startTime, endTime] = slotTime.split(" - ");
 
     const slotStart = new Date(`${date}T${startTime}:00`);
     const slotEnd = new Date(`${date}T${endTime}:00`);
 
-    if (slotEnd <= today) {
+    if (slotEnd.getTime() <= now) {
       return res.status(400).json({ msg: "Cannot select ended slot" });
     }
 
