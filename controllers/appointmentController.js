@@ -327,15 +327,7 @@ exports.rescheduleAppointment = async (req, res) => {
     appointment.end = endDate;
     appointment.status = role === "admin" || role === "provider" ? "approved" : "pending";
 
-    const formattedTime = startDate.toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true
-    });
+   const formattedTime = startDate.toISOString();
 
     await appointment.save();
     const provider = await Provider.findById(appointment.providerId);
@@ -416,12 +408,12 @@ exports.bookSlot = async (req, res) => {
       return res.status(404).json({ message: "Provider not found" });
     }
 
-    // 1ï¸âƒ£ Check unavailable dates
+    //Check unavailable dates
     if (provider.unavailableDates?.includes(date)) {
       return res.status(400).json({ msg: "Provider not available on this date" });
     }
 
-    // 2ï¸âƒ£ Check weekly template
+    //Check weekly template
     const dayAvailability = provider.weeklyAvailability.find(
       (d) => d.day === day
     );
@@ -438,7 +430,7 @@ exports.bookSlot = async (req, res) => {
       return res.status(400).json({ msg: "Slot does not exist" });
     }
 
-    // 3ï¸âƒ£ Time validation
+    //  Time validation
     const today = new Date();
     const [startTime, endTime] = slotTime.split(" - ");
 
@@ -449,19 +441,18 @@ exports.bookSlot = async (req, res) => {
       return res.status(400).json({ msg: "Cannot select ended slot" });
     }
 
-    // 4ï¸âƒ£ Check if already booked (IMPORTANT FIX)
+    //Check if already booked (IMPORTANT FIX)
     const existingAppointment = await Appointment.findOne({
       providerId,
-      start: slotStart,
-      end: slotEnd,
-      status: { $in: ["pending", "approved"] }
+      status: { $in: ["pending", "approved"] },
+      start: { $lt: slotEnd },
+      end: { $gt: slotStart }
     });
-
     if (existingAppointment) {
       return res.status(400).json({ msg: "Slot already booked" });
     }
 
-    // 5ï¸âƒ£ Create appointment (DO NOT modify weeklyAvailability)
+    //Create appointment (DO NOT modify weeklyAvailability)
     const appointment = await Appointment.create({
       providerId,
       userId: req.user._id,
@@ -470,7 +461,7 @@ exports.bookSlot = async (req, res) => {
       status: "pending"
     });
 
-    // 6ï¸âƒ£ Notifications
+    //Notifications
     await Notification.create({
       userId: req.user._id,
       message: `Your appointment with ${provider.name} is pending approval.`
