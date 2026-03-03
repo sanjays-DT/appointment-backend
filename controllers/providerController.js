@@ -2,7 +2,7 @@ const Provider = require("../models/Provider");
 const mongoose = require("mongoose");
 const Appointment = require("../models/Appointment");
 const bcrypt = require("bcrypt");
-const generateToken = require("../utils/generateToken");
+const moment = require('moment-timezone');
 const { validateName, validateEmail, validatePassword } = require("../utils/validators");
 
 /* ======================
@@ -406,10 +406,14 @@ exports.getProviderDashboardStats = async (req, res) => {
 exports.getProviderSlots = async (req, res) => {
   try {
     const { id } = req.params;
-    const { date } = req.query;
+    const { date, timezone } = req.query; // Get timezone from frontend
 
     if (!id || !date) {
       return res.status(400).json({ message: "Missing providerId or date" });
+    }
+
+    if (!timezone) {
+      return res.status(400).json({ message: "Timezone is required" });
     }
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -422,16 +426,15 @@ exports.getProviderSlots = async (req, res) => {
     }
 
     if (provider.unavailableDates?.includes(date)) {
-  return res.json({
-    slots: [],
-    isUnavailable: true
-  });
-}
+      return res.json({
+        slots: [],
+        isUnavailable: true
+      });
+    }
 
-    // Get weekday name
-    const day = new Date(date).toLocaleDateString("en-US", {
-      weekday: "long",
-    });
+    // Get weekday name from the date in the user's timezone
+    const day = moment.tz(date, "YYYY-MM-DD", timezone).format('dddd');
+    console.log("Day in user's timezone:", day);
 
     const dayAvailability = provider.weeklyAvailability.find(
       (d) => d.day === day
@@ -441,41 +444,60 @@ exports.getProviderSlots = async (req, res) => {
       return res.json({ slots: [] });
     }
 
-    // ðŸ”¹ Get date overrides (manual changes)
+    // Get date overrides (manual changes)
     const override = provider.dateOverrides?.find(
       (d) => d.date === date
     );
 
-    // ðŸ”¹ Get booked appointments
+    // Calculate start and end of day in UTC for the user's timezone
+    const startOfDay = moment.tz(date, "YYYY-MM-DD", timezone).startOf('day').utc().toDate();
+    const endOfDay = moment.tz(date, "YYYY-MM-DD", timezone).endOf('day').utc().toDate();
+
+    console.log("Date range for query:", {
+      date,
+      timezone,
+      startOfDay: startOfDay.toISOString(),
+      endOfDay: endOfDay.toISOString()
+    });
+
+    // Get booked appointments using UTC times
     const bookedAppointments = await Appointment.find({
       providerId: id,
       start: {
-        $gte: new Date(`${date}T00:00:00`),
-        $lte: new Date(`${date}T23:59:59`)
+        $gte: startOfDay,
+        $lte: endOfDay
       },
       status: { $in: ["pending", "approved"] }
     });
 
+    console.log("Booked appointments found:", bookedAppointments.length);
+
     const slots = dayAvailability.slots.map(slot => {
-      const [startTime] = slot.time.split(" - ");
-      const slotStart = new Date(`${date}T${startTime}:00`);
+      const [startTime, endTime] = slot.time.split(" - ");
+      
+      // Convert slot time to UTC for comparison with booked appointments
+      const slotStartUTC = moment.tz(`${date} ${startTime}`, "YYYY-MM-DD HH:mm", timezone).utc().toDate();
+      const slotEndUTC = moment.tz(`${date} ${endTime}`, "YYYY-MM-DD HH:mm", timezone).utc().toDate();
 
-      const isBooked = bookedAppointments.some(
-        appt => appt.start.getTime() === slotStart.getTime()
-      );
+      // Check if this slot is booked by comparing UTC times
+      const isBooked = bookedAppointments.some(appt => {
+        // Allow 1 minute tolerance for time matching
+        const timeDiff = Math.abs(appt.start.getTime() - slotStartUTC.getTime());
+        return timeDiff < 60000; // Within 1 minute
+      });
 
-      // ðŸ”¹ Check override
+      // Check override
       const overrideSlot = override?.slots?.find(
         (s) => s.time === slot.time
       );
 
-      let isAvailable = true; // âœ… GREEN by default
+      let isAvailable = true; // GREEN by default
 
       if (overrideSlot) {
         isAvailable = overrideSlot.isAvailable;
       }
 
-      // ðŸš¨ Booking always overrides everything
+      // Booking always overrides everything
       if (isBooked) {
         isAvailable = false;
       }
@@ -483,9 +505,20 @@ exports.getProviderSlots = async (req, res) => {
       return {
         time: slot.time,
         isBooked,
-        isAvailable
+        isAvailable,
+        // Optional: include UTC times for debugging
+        debug: {
+          slotStartUTC: slotStartUTC.toISOString(),
+          slotEndUTC: slotEndUTC.toISOString()
+        }
       };
     });
+
+    console.log("Slots with status:", slots.map(s => ({
+      time: s.time,
+      isBooked: s.isBooked,
+      isAvailable: s.isAvailable
+    })));
 
     res.json({ slots });
 
