@@ -3,6 +3,7 @@ const Notification = require("../models/Notification");
 const Provider = require("../models/Provider");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const { formatForUser, formatForProvider } = require("../utils/notificationHelper");
 
 /* =========================================================
    HELPER: Validate Time
@@ -44,7 +45,7 @@ function getAuthId(req) {
 }
 
 /* =========================================================
-   CREATE APPOINTMENT (USER ONLY)
+   CREATE APPOINTMENT (USER ONLY) - FIXED
 ========================================================= */
 exports.createAppointment = async (req, res) => {
   try {
@@ -53,7 +54,7 @@ exports.createAppointment = async (req, res) => {
       return res.status(403).json({ message: "Only users can book appointments" });
     }
 
-    const { providerId, start, end } = req.body;
+    const { providerId, start, end, timezone } = req.body; // 👈 Add timezone
     const userId = getAuthId(req);
 
     if (!providerId || !start || !end) {
@@ -88,27 +89,48 @@ exports.createAppointment = async (req, res) => {
       status: "pending"
     });
 
+    // FIX: Get user's timezone
+    const userTimezone = timezone || req.headers['x-timezone'] || 'Asia/Kolkata';
+    
+    // FIX: Format time for user notification
+    const userLocalTime = await formatForUser(startDate, userId, userTimezone);
+
     await Notification.create({
       userId,
-      message: `Your appointment is pending approval.`
+      message: `Your appointment with ${provider.name} is pending approval for ${userLocalTime}.`,
+      read: false
     });
+
+    //FIX: Format time for provider notification
+    const providerTimezone = provider.timezone || userTimezone;
+    const providerLocalTime = await formatForProvider(startDate, providerId, providerTimezone);
 
     await Notification.create({
       providerId: providerId,
-      message: `New appointment request from ${req.user?.name || "a user"} is pending approval.`
+      message: `New appointment request from ${req.user?.name || "a user"} for ${providerLocalTime} is pending approval.`,
+      read: false
     });
 
+    // Admin notifications (use UTC for admins)
     const adminIds = await getAdminUserIds();
     await Promise.all(
       adminIds.map(adminId =>
         Notification.create({
           userId: adminId,
-          message: `New appointment requires approval.`
+          message: `New appointment requires approval for ${new Date(startDate).toLocaleString()}.`,
+          read: false
         })
       )
     );
 
-    res.status(201).json({ message: "Appointment created", appointment });
+    res.status(201).json({ 
+      message: "Appointment created", 
+      appointment: {
+        ...appointment.toObject(),
+        userLocalTime,
+        providerLocalTime
+      }
+    });
 
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message });
@@ -190,7 +212,7 @@ exports.getProviderAppointments = async (req, res) => {
 };
 
 /* =========================================================
-   APPROVE APPOINTMENT (ADMIN + PROVIDER OWN)
+   APPROVE APPOINTMENT (ADMIN + PROVIDER OWN) - FIXED
 ========================================================= */
 exports.approveAppointment = async (req, res) => {
   try {
@@ -209,12 +231,22 @@ exports.approveAppointment = async (req, res) => {
     appt.status = "approved";
     await appt.save();
 
+    // FIX: Format time for user notification
+    const userLocalTime = await formatForUser(appt.start, appt.userId);
+
     await Notification.create({
       userId: appt.userId,
-      message: `Your appointment has been approved with ${provider.name}.`
+      message: `Your appointment with ${provider.name} for ${userLocalTime} has been approved.`,
+      read: false
     });
 
-    res.json({ message: "Appointment approved", appt });
+    res.json({ 
+      message: "Appointment approved", 
+      appt: {
+        ...appt.toObject(),
+        approvedTime: userLocalTime
+      }
+    });
 
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -222,7 +254,7 @@ exports.approveAppointment = async (req, res) => {
 };
 
 /* =========================================================
-   REJECT APPOINTMENT (ADMIN + PROVIDER OWN)
+   REJECT APPOINTMENT (ADMIN + PROVIDER OWN) - FIXED
 ========================================================= */
 exports.rejectAppointment = async (req, res) => {
   try {
@@ -241,12 +273,22 @@ exports.rejectAppointment = async (req, res) => {
     appt.status = "rejected";
     await appt.save();
 
+    // FIX: Format time for user notification
+    const userLocalTime = await formatForUser(appt.start, appt.userId);
+
     await Notification.create({
       userId: appt.userId,
-      message: `Your appointment has been rejected with ${provider.name}.`
+      message: `Your appointment with ${provider.name} has been rejected.`,
+      read: false
     });
 
-    res.json({ message: "Appointment rejected", appt });
+    res.json({ 
+      message: "Appointment rejected", 
+      appt: {
+        ...appt.toObject(),
+        rejectedTime: userLocalTime
+      }
+    });
 
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -254,7 +296,7 @@ exports.rejectAppointment = async (req, res) => {
 };
 
 /* =========================================================
-   CANCEL APPOINTMENT (ADMIN OR USER OWN)
+   CANCEL APPOINTMENT (ADMIN OR USER OWN) - FIXED
 ========================================================= */
 exports.cancelAppointment = async (req, res) => {
   try {
@@ -271,9 +313,13 @@ exports.cancelAppointment = async (req, res) => {
     appt.status = "cancelled";
     await appt.save();
 
+    // FIX: Format time for provider notification
+    const providerLocalTime = await formatForProvider(appt.start, appt.providerId);
+
     await Notification.create({
       providerId: appt.providerId,
-      message: `Appointment with ${req.user?.name || "a user"} was cancelled.`
+      message: `Appointment with ${req.user?.name || "a user"} for ${providerLocalTime} was cancelled.`,
+      read: false
     });
 
     res.json({ message: "Appointment cancelled" });
@@ -290,7 +336,7 @@ exports.rescheduleAppointment = async (req, res) => {
   try {
     const role = getRole(req);
     const authId = getAuthId(req);
-    const { start, end } = req.body;
+    const { start, end, timezone } = req.body; // 👈 Make sure to get timezone from request
 
     const appointment = await Appointment.findById(req.params.id);
     if (!appointment) return res.status(404).json({ message: "Appointment not found" });
@@ -327,32 +373,64 @@ exports.rescheduleAppointment = async (req, res) => {
     appointment.end = endDate;
     appointment.status = role === "admin" || role === "provider" ? "approved" : "pending";
 
-   const formattedTime = startDate.toISOString();
-
     await appointment.save();
+    
+    // Get provider and user details
     const provider = await Provider.findById(appointment.providerId);
+    const user = await User.findById(appointment.userId);
+    
+    // FIX 1: Get user's timezone (from request, or from database)
+    const userTimezone = timezone || req.headers['x-timezone'] || 'Asia/Kolkata'; // Default to IST
+    
+    // FIX 2: Format time for user in THEIR timezone
+    const userLocalTime = new Date(startDate).toLocaleString('en-IN', { 
+      timeZone: userTimezone,
+      dateStyle: 'full',
+      timeStyle: 'short'
+    });
+    
+    // FIX 3: For provider, try to get their timezone or use same as user
+    const providerTimezone = provider.timezone || userTimezone;
+    const providerLocalTime = new Date(startDate).toLocaleString('en-IN', { 
+      timeZone: providerTimezone,
+      dateStyle: 'full',
+      timeStyle: 'short'
+    });
+
+    // FIX 4: Create notifications with LOCAL times, not UTC
     await Notification.create({
       userId: appointment.userId,
-      message: `Your appointment with ${provider.name} has been rescheduled to ${formattedTime}.`
+      message: `Your appointment with ${provider.name} has been rescheduled to ${userLocalTime}.`,
+      read: false
     });
 
-    const user = await User.findById(appointment.userId);
     await Notification.create({
       providerId: appointment.providerId,
-      message: `Appointment with ${user.name} has been rescheduled to ${formattedTime}.`
+      message: `Appointment with ${user.name} has been rescheduled to ${providerLocalTime}.`,
+      read: false
     });
-    res.json({ message: "Appointment rescheduled", appointment });
+
+    // FIX 5: Return response with local time for frontend
+    res.json({ 
+      message: "Appointment rescheduled", 
+      appointment: {
+        ...appointment.toObject(),
+        userLocalTime,
+        providerLocalTime
+      }
+    });
 
   } catch (err) {
+    console.error("Reschedule error:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-// MARK MISSED APPOINTMENTS (SYSTEM JOB)
+/* =========================================================
+   MARK MISSED APPOINTMENTS (SYSTEM JOB) - FIXED
+========================================================= */
 exports.markMissedAppointments = async () => {
   const now = new Date();
-
-
   const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
 
   const missedAppointments = await Appointment.find({
@@ -366,15 +444,22 @@ exports.markMissedAppointments = async () => {
     appt.status = "missed";
     await appt.save();
 
-    // USER notification
+    // FIX: Format times for each recipient
+    const userLocalTime = await formatForUser(appt.start, appt.userId._id);
+    const providerLocalTime = await formatForProvider(appt.start, appt.providerId._id);
+
+    // USER notification with formatted time
     await Notification.create({
       userId: appt.userId._id,
-      message: `Your appointment with ${appt.providerId.name} was missed. Please reschedule.`
+      message: `Your appointment with ${appt.providerId.name} for ${userLocalTime} was missed. Please reschedule.`,
+      read: false
     });
 
+    // PROVIDER notification with formatted time
     await Notification.create({
       providerId: appt.providerId._id,
-      message: `Your appointment with ${appt.userId.name} was missed. Please reschedule.`
+      message: `Your appointment with ${appt.userId.name} for ${providerLocalTime} was missed. Please reschedule.`,
+      read: false
     });
 
     // ADMIN notification
@@ -382,18 +467,32 @@ exports.markMissedAppointments = async () => {
     for (const adminId of adminIds) {
       await Notification.create({
         userId: adminId,
-        message: `You did not approve the appointment for ${appt.userId.name} with ${appt.providerId.name} within 15 minutes.`
+        message: `You did not approve the appointment for ${appt.userId.name} with ${appt.providerId.name} for ${new Date(appt.start).toLocaleString()} within 15 minutes.`,
+        read: false
       });
     }
   }
 };
 
 /* =========================================================
-   UPDATED: Book a slot with strict date/slot validation
-   ========================================================= */
+   Book a slot with strict date/slot validation - FIXED
+========================================================= */
 exports.bookSlot = async (req, res) => {
   try {
-    const { providerId, slotTime, date } = req.body;
+    const { providerId, slotTime, date, timezone } = req.body;
+
+    if (!timezone) {
+      return res.status(400).json({ 
+        message: "Timezone is required. Please refresh and try again.",
+        debug: "Send timezone from frontend using: Intl.DateTimeFormat().resolvedOptions().timeZone"
+      });
+    }
+
+    console.log("=== BOOK SLOT DEBUG ===");
+    console.log("1. Received from frontend:");
+    console.log("   - date:", date);
+    console.log("   - slotTime:", slotTime);
+    console.log("   - timezone:", timezone);
 
     if (!providerId || !date || !slotTime) {
       return res.status(400).json({ message: "Missing required fields" });
@@ -430,29 +529,24 @@ exports.bookSlot = async (req, res) => {
       return res.status(400).json({ msg: "Slot does not exist" });
     }
 
-    //  Time validation
-    const now = new Date().getTime();
+    // Parse times
     const [startTime, endTime] = slotTime.split(" - ");
-
     const slotStart = new Date(`${date}T${startTime}:00`);
     const slotEnd = new Date(`${date}T${endTime}:00`);
 
-    if (slotEnd.getTime() <= now) {
-      return res.status(400).json({ msg: "Cannot select ended slot" });
-    }
-
-    //Check if already booked (IMPORTANT FIX)
+    //Check if already booked
     const existingAppointment = await Appointment.findOne({
       providerId,
       status: { $in: ["pending", "approved"] },
       start: { $lt: slotEnd },
       end: { $gt: slotStart }
     });
+    
     if (existingAppointment) {
       return res.status(400).json({ msg: "Slot already booked" });
     }
 
-    //Create appointment (DO NOT modify weeklyAvailability)
+    //Create appointment
     const appointment = await Appointment.create({
       providerId,
       userId: req.user._id,
@@ -461,29 +555,42 @@ exports.bookSlot = async (req, res) => {
       status: "pending"
     });
 
-    //Notifications
+    // FIX: Format times for notifications
+    const userLocalTime = await formatForUser(slotStart, req.user._id, timezone);
+    const providerLocalTime = await formatForProvider(slotStart, providerId, provider.timezone || timezone);
+
+    //Notifications with proper time formats
     await Notification.create({
       userId: req.user._id,
-      message: `Your appointment with ${provider.name} is pending approval.`
+      message: `Your appointment with ${provider.name} for ${userLocalTime} is pending approval.`,
+      read: false
     });
 
     await Notification.create({
       providerId,
-      message: `${req.user.name} booked an appointment. Approval required.`
+      message: `${req.user.name} booked an appointment. Approval required.`,
+      read: false
     });
 
     const admins = await User.find({ role: "admin" });
-
     await Promise.all(
       admins.map(admin =>
         Notification.create({
           userId: admin._id,
-          message: `${req.user.name} booked an appointment with ${provider.name}.`
+          message: `${req.user.name} booked an appointment with ${provider.name} for ${new Date(slotStart).toLocaleString()}.`,
+          read: false
         })
       )
     );
 
-    res.json({ msg: "Slot booked successfully", appointment });
+    res.json({ 
+      msg: "Slot booked successfully", 
+      appointment: {
+        ...appointment.toObject(),
+        userLocalTime,
+        providerLocalTime
+      }
+    });
 
   } catch (error) {
     console.error("BOOK SLOT ERROR:", error);
