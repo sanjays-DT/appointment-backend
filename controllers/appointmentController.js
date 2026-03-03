@@ -3,6 +3,7 @@ const Notification = require("../models/Notification");
 const Provider = require("../models/Provider");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const moment = require("moment-timezone");
 const { formatForUser, formatForProvider } = require("../utils/notificationHelper");
 
 /* =========================================================
@@ -91,7 +92,7 @@ exports.createAppointment = async (req, res) => {
 
     // FIX: Get user's timezone
     const userTimezone = timezone || req.headers['x-timezone'] || 'Asia/Kolkata';
-    
+
     // FIX: Format time for user notification
     const userLocalTime = await formatForUser(startDate, userId, userTimezone);
 
@@ -123,8 +124,8 @@ exports.createAppointment = async (req, res) => {
       )
     );
 
-    res.status(201).json({ 
-      message: "Appointment created", 
+    res.status(201).json({
+      message: "Appointment created",
       appointment: {
         ...appointment.toObject(),
         userLocalTime,
@@ -240,8 +241,8 @@ exports.approveAppointment = async (req, res) => {
       read: false
     });
 
-    res.json({ 
-      message: "Appointment approved", 
+    res.json({
+      message: "Appointment approved",
       appt: {
         ...appt.toObject(),
         approvedTime: userLocalTime
@@ -282,8 +283,8 @@ exports.rejectAppointment = async (req, res) => {
       read: false
     });
 
-    res.json({ 
-      message: "Appointment rejected", 
+    res.json({
+      message: "Appointment rejected",
       appt: {
         ...appt.toObject(),
         rejectedTime: userLocalTime
@@ -374,24 +375,24 @@ exports.rescheduleAppointment = async (req, res) => {
     appointment.status = role === "admin" || role === "provider" ? "approved" : "pending";
 
     await appointment.save();
-    
+
     // Get provider and user details
     const provider = await Provider.findById(appointment.providerId);
     const user = await User.findById(appointment.userId);
-    
+
     // FIX 1: Get user's timezone (from request, or from database)
     const userTimezone = timezone || req.headers['x-timezone'] || 'Asia/Kolkata'; // Default to IST
-    
+
     // FIX 2: Format time for user in THEIR timezone
-    const userLocalTime = new Date(startDate).toLocaleString('en-IN', { 
+    const userLocalTime = new Date(startDate).toLocaleString('en-IN', {
       timeZone: userTimezone,
       dateStyle: 'full',
       timeStyle: 'short'
     });
-    
+
     // FIX 3: For provider, try to get their timezone or use same as user
     const providerTimezone = provider.timezone || userTimezone;
-    const providerLocalTime = new Date(startDate).toLocaleString('en-IN', { 
+    const providerLocalTime = new Date(startDate).toLocaleString('en-IN', {
       timeZone: providerTimezone,
       dateStyle: 'full',
       timeStyle: 'short'
@@ -411,8 +412,8 @@ exports.rescheduleAppointment = async (req, res) => {
     });
 
     // FIX 5: Return response with local time for frontend
-    res.json({ 
-      message: "Appointment rescheduled", 
+    res.json({
+      message: "Appointment rescheduled",
       appointment: {
         ...appointment.toObject(),
         userLocalTime,
@@ -482,71 +483,52 @@ exports.bookSlot = async (req, res) => {
     const { providerId, slotTime, date, timezone } = req.body;
 
     if (!timezone) {
-      return res.status(400).json({ 
-        message: "Timezone is required. Please refresh and try again.",
-        debug: "Send timezone from frontend using: Intl.DateTimeFormat().resolvedOptions().timeZone"
+      return res.status(400).json({
+        message: "Timezone is required. Please refresh and try again."
       });
     }
 
     console.log("=== BOOK SLOT DEBUG ===");
-    console.log("1. Received from frontend:");
-    console.log("   - date:", date);
-    console.log("   - slotTime:", slotTime);
-    console.log("   - timezone:", timezone);
+    console.log("1. Received:", { date, slotTime, timezone });
 
     if (!providerId || !date || !slotTime) {
       return res.status(400).json({ message: "Missing required fields" });
     }
-
-    const day = new Date(date).toLocaleDateString("en-US", {
-      weekday: "long",
-    });
 
     const provider = await Provider.findById(providerId);
     if (!provider) {
       return res.status(404).json({ message: "Provider not found" });
     }
 
-    //Check unavailable dates
-    if (provider.unavailableDates?.includes(date)) {
-      return res.status(400).json({ msg: "Provider not available on this date" });
-    }
-
-    //Check weekly template
-    const dayAvailability = provider.weeklyAvailability.find(
-      (d) => d.day === day
-    );
-
-    if (!dayAvailability) {
-      return res.status(400).json({ msg: "No availability for this day" });
-    }
-
-    const slotExists = dayAvailability.slots.find(
-      (s) => s.time === slotTime
-    );
-
-    if (!slotExists) {
-      return res.status(400).json({ msg: "Slot does not exist" });
-    }
-
     // Parse times
     const [startTime, endTime] = slotTime.split(" - ");
-    const slotStart = new Date(`${date}T${startTime}:00`);
-    const slotEnd = new Date(`${date}T${endTime}:00`);
 
-    //Check if already booked
+    // ✅ CREATE DATES FIRST
+    const userMoment = moment.tz(`${date} ${startTime}`, "YYYY-MM-DD HH:mm", timezone);
+    const slotStart = userMoment.utc().toDate();
+    
+    const userMomentEnd = moment.tz(`${date} ${endTime}`, "YYYY-MM-DD HH:mm", timezone);
+    const slotEnd = userMomentEnd.utc().toDate();
+
+    console.log("2. Time conversion:", {
+      userLocal: `${date} ${startTime} (${timezone})`,
+      utcStored: slotStart.toISOString(),
+      utcEndStored: slotEnd.toISOString()
+    });
+
+    // Check if already booked
     const existingAppointment = await Appointment.findOne({
       providerId,
       status: { $in: ["pending", "approved"] },
       start: { $lt: slotEnd },
       end: { $gt: slotStart }
     });
-    
+
     if (existingAppointment) {
       return res.status(400).json({ msg: "Slot already booked" });
     }
 
-    //Create appointment
+    // Create appointment
     const appointment = await Appointment.create({
       providerId,
       userId: req.user._id,
@@ -555,23 +537,32 @@ exports.bookSlot = async (req, res) => {
       status: "pending"
     });
 
-    // FIX: Format times for notifications
-    const userLocalTime = await formatForUser(slotStart, req.user._id, timezone);
-    const providerLocalTime = await formatForProvider(slotStart, providerId, provider.timezone || timezone);
+    console.log("3. Appointment created:", {
+      startUTC: appointment.start.toISOString(),
+      endUTC: appointment.end.toISOString()
+    });
 
-    //Notifications with proper time formats
+    // Format for user
+    const userLocalTime = await formatForUser(slotStart, req.user._id, timezone);
+    console.log("4. Formatted for user:", userLocalTime);
+
+    // Create notifications
     await Notification.create({
       userId: req.user._id,
       message: `Your appointment with ${provider.name} for ${userLocalTime} is pending approval.`,
       read: false
     });
 
+    const providerTimezone = provider.timezone || timezone;
+    const providerLocalTime = await formatForProvider(slotStart, providerId, providerTimezone);
+
     await Notification.create({
       providerId,
-      message: `${req.user.name} booked an appointment. Approval required.`,
+      message: `${req.user.name} booked an appointment for ${providerLocalTime}. Approval required.`,
       read: false
     });
 
+    // Admin notifications
     const admins = await User.find({ role: "admin" });
     await Promise.all(
       admins.map(admin =>
@@ -583,8 +574,8 @@ exports.bookSlot = async (req, res) => {
       )
     );
 
-    res.json({ 
-      msg: "Slot booked successfully", 
+    res.json({
+      msg: "Slot booked successfully",
       appointment: {
         ...appointment.toObject(),
         userLocalTime,
@@ -645,3 +636,32 @@ exports.unlockSlot = async (req, res) => {
   }
 };
 
+// Add to your controller temporarily
+exports.testTimeConversion = async (req, res) => {
+  const { utcDate, timezone } = req.body;
+
+  const testDate = utcDate ? new Date(utcDate) : new Date('2026-03-03T15:30:00.000Z');
+  const testTimezone = timezone || 'Asia/Kolkata';
+
+  try {
+    // Test with your current helper
+    const formatted = await formatForUser(testDate, 'test-user', testTimezone);
+
+    // Manual conversion for comparison
+    const manualFormat = moment.utc(testDate)
+      .tz(testTimezone)
+      .format('dddd, MMMM Do YYYY [at] h:mm A');
+
+    res.json({
+      input: {
+        utcDate: testDate.toISOString(),
+        timezone: testTimezone
+      },
+      helper_output: formatted,
+      manual_output: manualFormat,
+      match: formatted === manualFormat
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
