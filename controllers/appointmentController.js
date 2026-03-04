@@ -55,7 +55,7 @@ exports.createAppointment = async (req, res) => {
       return res.status(403).json({ message: "Only users can book appointments" });
     }
 
-    const { providerId, start, end, timezone } = req.body; // 👈 Add timezone
+    const { providerId, start, end, timezone } = req.body; // Add timezone
     const userId = getAuthId(req);
 
     if (!providerId || !start || !end) {
@@ -139,7 +139,7 @@ exports.createAppointment = async (req, res) => {
 };
 
 /* =========================================================
-   GET APPOINTMENTS (ADMIN â†’ ALL | PROVIDER â†’ OWN)
+   GET APPOINTMENTS (ADMIN (ALL) | PROVIDER (OWN))
 ========================================================= */
 exports.getAllAppointments = async (req, res) => {
   try {
@@ -337,7 +337,7 @@ exports.rescheduleAppointment = async (req, res) => {
   try {
     const role = getRole(req);
     const authId = getAuthId(req);
-    const { start, end, timezone } = req.body; // 👈 Make sure to get timezone from request
+    const { start, end, timezone } = req.body; // Make sure to get timezone from request
 
     const appointment = await Appointment.findById(req.params.id);
     if (!appointment) return res.status(404).json({ message: "Appointment not found" });
@@ -488,8 +488,8 @@ exports.bookSlot = async (req, res) => {
       });
     }
 
-    console.log("=== BOOK SLOT DEBUG ===");
-    console.log("1. Received:", { date, slotTime, timezone });
+    // console.log("=== BOOK SLOT DEBUG ===");
+    // console.log("1. Received:", { date, slotTime, timezone });
 
     if (!providerId || !date || !slotTime) {
       return res.status(400).json({ message: "Missing required fields" });
@@ -503,18 +503,18 @@ exports.bookSlot = async (req, res) => {
     // Parse times
     const [startTime, endTime] = slotTime.split(" - ");
 
-    // ✅ CREATE DATES FIRST
+    // CREATE DATES FIRST
     const userMoment = moment.tz(`${date} ${startTime}`, "YYYY-MM-DD HH:mm", timezone);
     const slotStart = userMoment.utc().toDate();
     
     const userMomentEnd = moment.tz(`${date} ${endTime}`, "YYYY-MM-DD HH:mm", timezone);
     const slotEnd = userMomentEnd.utc().toDate();
 
-    console.log("2. Time conversion:", {
-      userLocal: `${date} ${startTime} (${timezone})`,
-      utcStored: slotStart.toISOString(),
-      utcEndStored: slotEnd.toISOString()
-    });
+    // console.log("2. Time conversion:", {
+    //   userLocal: `${date} ${startTime} (${timezone})`,
+    //   utcStored: slotStart.toISOString(),
+    //   utcEndStored: slotEnd.toISOString()
+    // });
 
     // Check if already booked
     const existingAppointment = await Appointment.findOne({
@@ -537,14 +537,14 @@ exports.bookSlot = async (req, res) => {
       status: "pending"
     });
 
-    console.log("3. Appointment created:", {
-      startUTC: appointment.start.toISOString(),
-      endUTC: appointment.end.toISOString()
-    });
+    // console.log("3. Appointment created:", {
+    //   startUTC: appointment.start.toISOString(),
+    //   endUTC: appointment.end.toISOString()
+    // });
 
     // Format for user
     const userLocalTime = await formatForUser(slotStart, req.user._id, timezone);
-    console.log("4. Formatted for user:", userLocalTime);
+    // console.log("4. Formatted for user:", userLocalTime);
 
     // Create notifications
     await Notification.create({
@@ -636,32 +636,32 @@ exports.unlockSlot = async (req, res) => {
   }
 };
 
-// Add to your controller temporarily
-exports.testTimeConversion = async (req, res) => {
-  const { utcDate, timezone } = req.body;
+// TEST TIME CONVERSION
+// exports.testTimeConversion = async (req, res) => {
+//   const { utcDate, timezone } = req.body;
 
-  const testDate = utcDate ? new Date(utcDate) : new Date('2026-03-03T15:30:00.000Z');
-  const testTimezone = timezone || 'Asia/Kolkata';
+//   const testDate = utcDate ? new Date(utcDate) : new Date('2026-03-03T15:30:00.000Z');
+//   const testTimezone = timezone || 'Asia/Kolkata';
 
-  try {
-    // Test with your current helper
-    const formatted = await formatForUser(testDate, 'test-user', testTimezone);
+//   try {
+//     // Test with your current helper
+//     const formatted = await formatForUser(testDate, 'test-user', testTimezone);
 
-    // Manual conversion for comparison
-    const manualFormat = moment.utc(testDate)
-      .tz(testTimezone)
-      .format('dddd, MMMM Do YYYY [at] h:mm A');
+//     // Manual conversion for comparison
+//     const manualFormat = moment.utc(testDate)
+//       .tz(testTimezone)
+//       .format('dddd, MMMM Do YYYY [at] h:mm A');
 
-    res.json({
-      input: {
-        utcDate: testDate.toISOString(),
-        timezone: testTimezone
-      },
-      helper_output: formatted,
-      manual_output: manualFormat,
-      match: formatted === manualFormat
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
+//     res.json({
+//       input: {
+//         utcDate: testDate.toISOString(),
+//         timezone: testTimezone
+//       },
+//       helper_output: formatted,
+//       manual_output: manualFormat,
+//       match: formatted === manualFormat
+//     });
+//   } catch (error) {
+//     res.status(500).json({ error: error.message });
+//   }
+// };

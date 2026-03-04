@@ -33,6 +33,6 @@ router.get("/me",protect, getUserAppointments);
 router.get("/:id", protect, getProviderAppointments); 
 router.put("/:id/unlock-slot", protect, adminOnly,unlockSlot);
 router.post("/book-slot",protect,bookSlot);
-router.post("/test-time-conversion", testTimeConversion);
+// router.post("/test-time-conversion", testTimeConversion);
 
 module.exports = router;
