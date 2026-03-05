@@ -132,18 +132,13 @@ exports.deleteProvider = async (req, res) => {
 exports.setAvailability = async (req, res) => {
   try {
     const provider = await Provider.findById(req.params.id);
-    if (!provider) {
+    if (!provider)
       return res.status(404).json({ message: "Provider not found" });
-    }
 
     const { weeklyAvailability, dateOverrides } = req.body;
 
-    /* ==============================
-       Block Removing Days With Future Bookings
-    =============================== */
-
+    /* Block Removing Days With Future Bookings*/
     if (Array.isArray(weeklyAvailability)) {
-
       // OLD days from DB
       const oldDays = provider.weeklyAvailability.map((d) => d.day);
 
@@ -156,7 +151,7 @@ exports.setAvailability = async (req, res) => {
       if (removedDays.length > 0) {
         const now = new Date();
 
-        // Generate ALL new valid slots
+        // Generate ALL new valid time ranges for next 30 days
         const newSlots = [];
 
         weeklyAvailability.forEach((item) => {
@@ -174,23 +169,23 @@ exports.setAvailability = async (req, res) => {
           });
         });
 
-        // Get all future active appointments
+        // Get ALL future active appointments (no time filter mistake)
         const futureAppointments = await Appointment.find({
           providerId: provider._id,
           status: { $in: ["pending", "approved"] },
         });
 
         for (const appointment of futureAppointments) {
-          if (appointment.start < now) continue;
+          if (appointment.start < now) continue; // ignore past safely
 
-          const appointmentDay = appointment.start.toLocaleDateString(
-            "en-US",
-            { weekday: "long" }
-          );
+          const appointmentDay = appointment.start.toLocaleDateString("en-US", {
+            weekday: "long",
+          });
 
           const startTime = appointment.start
             .toISOString()
             .substring(11, 16);
+
           const endTime = appointment.end
             .toISOString()
             .substring(11, 16);
@@ -207,22 +202,22 @@ exports.setAvailability = async (req, res) => {
             });
           }
         }
-
-        // Safe to update weekly availability
-        provider.weeklyAvailability = weeklyAvailability.map((item) => ({
-          day: item.day,
-          slots: generateSlots(
-            item.startTime,
-            item.endTime,
-            item.slotMinutes
-          ),
-        }));
       }
+
+      // If safe → update weekly template
+      provider.weeklyAvailability = weeklyAvailability.map((item) => ({
+        day: item.day,
+        slots: generateSlots(
+          item.startTime,
+          item.endTime,
+          item.slotMinutes
+        ),
+      }));
     }
 
-    /* ==============================
-       Date Overrides
-    =============================== */
+    /* =====================================================
+       Date Overrides (No Change)
+       ====================================================== */
 
     if (Array.isArray(dateOverrides)) {
       provider.dateOverrides = dateOverrides.map((d) => ({
@@ -241,7 +236,6 @@ exports.setAvailability = async (req, res) => {
       weeklyAvailability: provider.weeklyAvailability,
       dateOverrides: provider.dateOverrides,
     });
-
   } catch (err) {
     console.error("Set availability error:", err);
     res.status(500).json({ message: err.message });
