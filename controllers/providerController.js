@@ -130,185 +130,121 @@ exports.deleteProvider = async (req, res) => {
 };
 
 exports.setAvailability = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
-    const provider = await Provider.findById(req.params.id).session(session);
+    const provider = await Provider.findById(req.params.id);
     if (!provider) {
-      await session.abortTransaction();
-      session.endSession();
       return res.status(404).json({ message: "Provider not found" });
     }
 
-    const { weeklyAvailability, dateOverrides, forceCancel, cancelReason } = req.body;
+    const { weeklyAvailability, dateOverrides } = req.body;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const reasonText = cancelReason || "Cancelled due to provider emergency";
-
-    /* =====================================================
-       HELPER: Cancel Appointments + Notify Users
-    ====================================================== */
-
-    const cancelAndNotify = async (appointments) => {
-
-      await Appointment.updateMany(
-        { _id: { $in: appointments.map(a => a._id) } },
-        {
-          $set: {
-            status: "cancelled",
-            reason: reasonText
-          }
-        },
-        { session }
-      );
-
-      for (const appointment of appointments) {
-
-        const user = await User.findById(appointment.userId).session(session);
-        const userTimezone = user?.timezone || "Asia/Kolkata";
-
-        const userLocalTime = await formatForUser(
-          appointment.start,
-          appointment.userId,
-          userTimezone
-        );
-
-        await Notification.create([{
-          userId: appointment.userId,
-          title: "Appointment Cancelled",
-          message: `Your appointment with ${provider.name} scheduled for ${userLocalTime} has been cancelled. Reason: ${reasonText}.`,
-          type: "appointment_cancelled",
-          read: false
-        }], { session });
-      }
-    };
-
-    /* =====================================================
-       1️⃣ DATE OVERRIDES CONFLICT CHECK
-    ====================================================== */
-
-    if (Array.isArray(dateOverrides) && dateOverrides.length > 0) {
-
-      const dateConditions = dateOverrides.map(dateObj => {
-        const startOfDay = new Date(dateObj.date);
-        startOfDay.setHours(0, 0, 0, 0);
-
-        const endOfDay = new Date(dateObj.date);
-        endOfDay.setHours(23, 59, 59, 999);
-
-        return {
-          start: { $gte: startOfDay, $lte: endOfDay }
-        };
-      });
-
-      const approvedAppointments = await Appointment.find({
-        providerId: provider._id,
-        status: "approved",
-        start: { $gte: today },
-        $or: dateConditions
-      }).session(session);
-
-      if (approvedAppointments.length > 0 && !forceCancel) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          message: "Cannot modify availability. Approved appointments exist.",
-          hasConflicts: true,
-          appointmentsCount: approvedAppointments.length
-        });
-      }
-
-      if (approvedAppointments.length > 0 && forceCancel) {
-        await cancelAndNotify(approvedAppointments);
-      }
-    }
-
-    /* =====================================================
-       2️⃣ WEEKLY TEMPLATE CONFLICT CHECK
-    ====================================================== */
-
-    if (Array.isArray(weeklyAvailability) && weeklyAvailability.length > 0) {
-
-      const changedDays = weeklyAvailability.map(w => w.day);
-
-      const futureAppointments = await Appointment.find({
-        providerId: provider._id,
-        status: "approved",
-        start: { $gte: today }
-      }).session(session);
-
-      const weekdayMap = [
-        "Sunday", "Monday", "Tuesday",
-        "Wednesday", "Thursday",
-        "Friday", "Saturday"
-      ];
-
-      const conflictingAppointments = futureAppointments.filter(app => {
-        const dayIndex = app.start.getUTCDay();
-        return changedDays.includes(weekdayMap[dayIndex]);
-      });
-
-      if (conflictingAppointments.length > 0 && !forceCancel) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({
-          message: "Cannot modify weekly availability. Approved appointments exist.",
-          hasConflicts: true,
-          appointmentsCount: conflictingAppointments.length
-        });
-      }
-
-      if (conflictingAppointments.length > 0 && forceCancel) {
-        await cancelAndNotify(conflictingAppointments);
-      }
-    }
-
-    /* =====================================================
-       3️⃣ UPDATE AVAILABILITY
-    ====================================================== */
+    /* ==============================
+       Block Removing Days With Future Bookings
+    =============================== */
 
     if (Array.isArray(weeklyAvailability)) {
-      provider.weeklyAvailability = weeklyAvailability.map(item => ({
-        day: item.day,
-        slots: generateSlots(
-          item.startTime,
-          item.endTime,
-          item.slotMinutes
-        ),
-      }));
+
+      // OLD days from DB
+      const oldDays = provider.weeklyAvailability.map((d) => d.day);
+
+      // NEW days from request
+      const newDays = weeklyAvailability.map((d) => d.day);
+
+      // Detect removed days
+      const removedDays = oldDays.filter((day) => !newDays.includes(day));
+
+      if (removedDays.length > 0) {
+        const now = new Date();
+
+        // Generate ALL new valid slots
+        const newSlots = [];
+
+        weeklyAvailability.forEach((item) => {
+          const slots = generateSlots(
+            item.startTime,
+            item.endTime,
+            item.slotMinutes
+          );
+
+          slots.forEach((slot) => {
+            newSlots.push({
+              day: item.day,
+              time: slot.time,
+            });
+          });
+        });
+
+        // Get all future active appointments
+        const futureAppointments = await Appointment.find({
+          providerId: provider._id,
+          status: { $in: ["pending", "approved"] },
+        });
+
+        for (const appointment of futureAppointments) {
+          if (appointment.start < now) continue;
+
+          const appointmentDay = appointment.start.toLocaleDateString(
+            "en-US",
+            { weekday: "long" }
+          );
+
+          const startTime = appointment.start
+            .toISOString()
+            .substring(11, 16);
+          const endTime = appointment.end
+            .toISOString()
+            .substring(11, 16);
+
+          const slotTime = `${startTime} - ${endTime}`;
+
+          const isStillValid = newSlots.some(
+            (s) => s.day === appointmentDay && s.time === slotTime
+          );
+
+          if (!isStillValid) {
+            return res.status(400).json({
+              message: `Cannot modify availability. Appointment exists on ${appointmentDay} at ${slotTime}`,
+            });
+          }
+        }
+
+        // Safe to update weekly availability
+        provider.weeklyAvailability = weeklyAvailability.map((item) => ({
+          day: item.day,
+          slots: generateSlots(
+            item.startTime,
+            item.endTime,
+            item.slotMinutes
+          ),
+        }));
+      }
     }
 
+    /* ==============================
+       Date Overrides
+    =============================== */
+
     if (Array.isArray(dateOverrides)) {
-      provider.dateOverrides = dateOverrides.map(d => ({
+      provider.dateOverrides = dateOverrides.map((d) => ({
         date: d.date,
-        slots: d.slots.map(s => ({
+        slots: d.slots.map((s) => ({
           time: s.time,
           isAvailable: s.isAvailable,
         })),
       }));
     }
 
-    await provider.save({ session });
+    await provider.save();
 
-    await session.commitTransaction();
-    session.endSession();
-
-    return res.json({
-      message: forceCancel
-        ? "Availability updated and conflicting appointments cancelled"
-        : "Availability updated successfully",
+    res.json({
+      message: "Availability updated successfully",
       weeklyAvailability: provider.weeklyAvailability,
       dateOverrides: provider.dateOverrides,
     });
 
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
     console.error("Set availability error:", err);
-    return res.status(err.status || 500).json({ message: err.message });
+    res.status(500).json({ message: err.message });
   }
 };
 
